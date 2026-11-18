@@ -470,13 +470,15 @@ impl Emulator {
                 // No mouse reports of any kind, focus reports or bracketed paste.
                 "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l",
                 "\x1b[?1004l\x1b[?2004l",
-                // Normal cursor and keypad keys, insert mode off, wrapping on,
-                // a visible cursor of the default shape.
-                "\x1b[?1l\x1b>\x1b[4l\x1b[?7h\x1b[?25h\x1b[0 q",
+                // Normal cursor and keypad keys, insert mode off, a line feed
+                // that only moves down, wrapping on, a visible cursor of the
+                // default shape.
+                "\x1b[?1l\x1b>\x1b[4l\x1b[20l\x1b[?7h\x1b[?25h\x1b[0 q",
                 // Plain text in the ordinary character set.
                 "\x1b[0m\x1b(B\x0f",
-                // The whole screen scrolls again; the cursor stays where it was.
-                "\x1b7\x1b[r\x1b8",
+                // The whole screen scrolls again and positions count from its
+                // corner, not a margin; the cursor stays where it was.
+                "\x1b7\x1b[?6l\x1b[r\x1b8",
             )
             .as_bytes(),
         );
@@ -1267,6 +1269,17 @@ mod tests {
             e.frame().history_len > 0,
             "lines scroll off the top into history"
         );
+    }
+
+    #[test]
+    fn reset_modes_turns_off_origin_mode() {
+        let mut e = emu();
+        // The old program counted positions from a margin.
+        e.feed(b"\x1b[2;3r\x1b[?6h");
+        e.reset_modes();
+        // A new program that sets a margin still addresses the whole screen.
+        e.feed(b"\x1b[2;3r\x1b[1;1Htop");
+        assert!(e.screen_text().starts_with("top"), "{}", e.screen_text());
     }
 
     #[test]
