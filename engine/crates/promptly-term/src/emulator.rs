@@ -447,6 +447,44 @@ impl Emulator {
         Some(self.drain_events())
     }
 
+    /// Put back the modes a program may have switched on, keeping the
+    /// screen and scrollback, for when a new program takes over the session
+    /// (a reconnect). Otherwise a full-screen program that was running when
+    /// the connection dropped leaves its alternate screen up, which never
+    /// rewraps on resize, and keeps mouse clicks going to the new shell
+    /// instead of selecting text.
+    pub fn reset_modes(&mut self) {
+        // Whatever the old program left held back is shown, and what it
+        // asked for is dropped: replies are not for the new program.
+        if self.sync_deadline().is_some() {
+            self.parser.stop_sync(&mut self.term);
+            let _ = self.drain_events();
+        }
+        let mut reset: Vec<u8> = Vec::new();
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            // Back to the primary screen and the cursor saved with it.
+            reset.extend_from_slice(b"\x1b[?1049l");
+        }
+        reset.extend_from_slice(
+            concat!(
+                // No mouse reports of any kind, focus reports or bracketed paste.
+                "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l",
+                "\x1b[?1004l\x1b[?2004l",
+                // Normal cursor and keypad keys, insert mode off, wrapping on,
+                // a visible cursor of the default shape.
+                "\x1b[?1l\x1b>\x1b[4l\x1b[?7h\x1b[?25h\x1b[0 q",
+                // Plain text in the ordinary character set.
+                "\x1b[0m\x1b(B\x0f",
+                // The whole screen scrolls again; the cursor stays where it was.
+                "\x1b7\x1b[r\x1b8",
+            )
+            .as_bytes(),
+        );
+        self.parser.advance(&mut self.term, &reset);
+        let _ = self.drain_events();
+        self.force_full = true;
+    }
+
     pub fn resize(&mut self, size: TermSize) {
         if size == self.size {
             return;
@@ -1188,6 +1226,56 @@ mod tests {
         assert!(!f.alt_screen);
         assert!(f.full, "leaving the alternate screen repaints everything");
         assert!(e.screen_text().starts_with("primary"));
+    }
+
+    #[test]
+    fn reset_modes_drops_what_a_dropped_program_left_on() {
+        let mut e = emu();
+        e.feed(b"before the drop\r\n");
+        // A full-screen program: alternate screen, mouse, bracketed paste,
+        // application cursor keys, a scroll region and a hidden cursor.
+        e.feed(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1h\x1b[?25l\x1b[2;5rtmux");
+        let f = e.frame();
+        assert!(f.alt_screen && f.mouse_reporting && f.bracketed_paste && f.app_cursor);
+
+        e.reset_modes();
+        let f = e.frame();
+        assert!(f.full);
+        assert!(!f.alt_screen, "back on the primary screen, which rewraps");
+        assert!(!f.mouse_reporting, "clicks select again");
+        assert!(!f.bracketed_paste);
+        assert!(!f.app_cursor);
+        assert!(
+            e.screen_text().starts_with("before the drop"),
+            "the screen is kept"
+        );
+        assert!(!e.screen_text().contains("tmux"));
+        let mouse = crate::MouseEvent {
+            action: crate::MouseAction::Press(crate::MouseButton::Left),
+            col: 0,
+            row: 0,
+            shift: false,
+            alt: false,
+            ctrl: false,
+        };
+        assert_eq!(e.mouse_report(mouse), None);
+
+        // The cursor stays put and the whole screen scrolls again.
+        e.feed(b"after\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9");
+        assert!(e.screen_text().contains("9"));
+        assert!(
+            e.frame().history_len > 0,
+            "lines scroll off the top into history"
+        );
+    }
+
+    #[test]
+    fn reset_modes_leaves_the_primary_screen_alone() {
+        let mut e = emu();
+        e.feed(b"one\r\ntwo");
+        e.reset_modes();
+        e.feed(b" more");
+        assert!(e.screen_text().starts_with("one\ntwo more"));
     }
 
     #[test]

@@ -224,10 +224,14 @@ impl Session {
     }
 
     /// Give the session a new transport after the old one went away, keeping
-    /// the screen and scrollback. The new end is told the current size.
+    /// the screen and scrollback, but none of the old program's modes. The
+    /// new end is told the current size.
     /// Call [`pump`] again afterwards with the new reader.
     pub fn replace_transport(&self, mut transport: Box<dyn Transport>) {
-        let emu = self.emulator.lock().unwrap();
+        let mut emu = self.emulator.lock().unwrap();
+        // The new shell starts afresh, so the old program's modes go: a
+        // dropped tmux or vim would otherwise keep the mouse and its screen.
+        emu.reset_modes();
         let _ = transport.resize(emu.size());
         let mut old = self.transport.lock().unwrap();
         old.close();
@@ -587,10 +591,19 @@ mod tests {
         assert!(session.screen_text().contains("first-2"));
 
         session.notice("\r\n[dropped]\r\n", |_| {});
+        // The old program had the mouse and its own screen when it went.
+        session.notice("\x1b[?1049h\x1b[?1000hfull screen", |_| {});
+        assert!(session.emulator.lock().unwrap().frame().mouse_reporting);
         let (shell, reader) =
             LocalShell::spawn(size, Some("/bin/sh".into()), None).expect("spawn /bin/sh");
         session.replace_transport(Box::new(shell));
         assert_eq!(session.exited(), None, "a fresh transport means not exited");
+        {
+            let mut emu = session.emulator.lock().unwrap();
+            let f = emu.frame();
+            assert!(!f.mouse_reporting, "the new shell does not get the mouse");
+            assert!(!f.alt_screen, "the new shell is on the primary screen");
+        }
         let _h = pump(session.clone(), reader, emit);
         session.write(b"echo second-$((2+2))\n").unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -605,6 +618,10 @@ mod tests {
         let text = session.screen_text();
         assert!(text.contains("first-2"), "old output kept:\n{text}");
         assert!(text.contains("[dropped]"), "notice shown:\n{text}");
+        assert!(
+            !text.contains("full screen"),
+            "the old program's screen went:\n{text}"
+        );
         session.write(b"exit\n").unwrap();
     }
 
