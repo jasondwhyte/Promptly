@@ -283,6 +283,12 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
         retired = engine.secretGet(oldSecretId);
         engine.secretDelete(oldSecretId);
       } catch (e) {
+        // It may have gone from this device before the delete failed.
+        if (retired != null) {
+          try {
+            engine.secretPut(oldSecretId, 'password', retired);
+          } catch (_) {}
+        }
         setState(() => _error = 'Could not forget the saved password: $e');
         return;
       }

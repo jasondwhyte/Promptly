@@ -624,9 +624,10 @@ class FakeEngine implements Engine {
   Object? failSecretDelete;
   @override
   void secretDelete(String id) {
+    // Like the engine, gone from this device before the vault step can fail.
+    secrets.remove(id);
     if (failSecretDelete case final e?) throw e;
     writes.add('delete secret');
-    secrets.remove(id);
   }
   @override
   GeneratedKey keyGenerate(SshKeyKind kind, String comment) {
@@ -1492,7 +1493,8 @@ void main() {
     expect(engine.secrets, {'p1': 'hunter2'});
     expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));
 
-    // Storage refuses the delete: the host keeps its password and says why.
+    // The delete fails partway: the password is put back, the host keeps it
+    // and says why.
     engine.failRecordPut = null;
     engine.failSecretDelete = 'secure storage is locked';
     await tester.tap(find.byKey(const Key('host-save')));
