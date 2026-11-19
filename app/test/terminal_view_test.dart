@@ -416,6 +416,44 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('Alt+arrows go to the shell; Ctrl+Alt+arrows, or Cmd+Option on a Mac, move between panes', (tester) async {
+    final engine = RecordingEngine();
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller)),
+      ),
+    );
+    await tester.pump();
+    final left = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.arrowLeft,
+      logicalKey: LogicalKeyboardKey.arrowLeft,
+      timeStamp: Duration.zero,
+    );
+
+    // Alt+Left reaches the program as xterm sends it: a word left in a shell.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    expect(AppShortcuts.isReserved(left), isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    expect(engine.written.last, utf8.encode('\x1b[1;3D'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    expect(AppShortcuts.isReserved(left), isTrue);
+    expect(AppShortcuts.focusLeft.control && AppShortcuts.focusLeft.alt, isTrue);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    expect(AppShortcuts.isReserved(left), isFalse, reason: 'Option+Left moves by a word');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    expect(AppShortcuts.isReserved(left), isTrue);
+    expect(AppShortcuts.focusLeft.meta && AppShortcuts.focusLeft.alt, isTrue);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    debugDefaultTargetPlatformOverride = null;
+    controller.dispose();
+  });
+
   testWidgets('on Windows AltGr types its character ahead of Ctrl shortcuts', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
