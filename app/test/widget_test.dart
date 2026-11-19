@@ -598,8 +598,10 @@ class FakeEngine implements Engine {
     return json == null ? null : StoreRecord(id: id, json: json);
   }
 
+  Object? failRecordPut;
   @override
   void recordPut(String collection, String id, String json) {
+    if (failRecordPut case final e?) throw e;
     writes.add('record $collection');
     (records[collection] ??= {})[id] = json;
   }
@@ -1483,9 +1485,18 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    // Storage refuses the delete: the host keeps its password and says why.
-    engine.failSecretDelete = 'secure storage is locked';
+    // The host can't be saved: the password it still points at is put back.
+    engine.failRecordPut = 'disk full';
     await editToAsk(forgetFirst: true);
+    await scrollTo(tester, find.text('disk full'));
+    expect(engine.secrets, {'p1': 'hunter2'});
+    expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));
+
+    // Storage refuses the delete: the host keeps its password and says why.
+    engine.failRecordPut = null;
+    engine.failSecretDelete = 'secure storage is locked';
+    await tester.tap(find.byKey(const Key('host-save')));
+    await tester.pumpAndSettle();
     await scrollTo(tester, find.textContaining('Could not forget the saved password'));
     expect(engine.secrets, {'p1': 'hunter2'});
     expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));

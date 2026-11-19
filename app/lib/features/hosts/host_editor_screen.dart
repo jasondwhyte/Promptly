@@ -160,7 +160,8 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
     tags: parseTags(_tags.text),
     color: _color,
     notes: _notes.text,
-    keepaliveSeconds: int.tryParse(_keepalive.text.trim()) ?? 30,
+    // Clamped too: the field may never have been built, so not validated.
+    keepaliveSeconds: (int.tryParse(_keepalive.text.trim()) ?? 30).clamp(0, 86400),
     favourite: _favourite,
     sessionLabelId: _sessionLabelId,
     labelText: _labelText.text.trim(),
@@ -274,10 +275,12 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
     // A saved password the host no longer uses: forgotten on the form, or
     // another way to sign in was picked. It goes before the host stops
     // pointing at it, so a host kept on this device never lets it sync in
-    // between. A host left pointing at a missing password just asks for it.
+    // between. Should the host then not save, the password is put back.
     final oldSecretId = _original.auth.passwordSecretId;
+    String? retired;
     if (oldSecretId != null && auth.passwordSecretId != oldSecretId) {
       try {
+        retired = engine.secretGet(oldSecretId);
         engine.secretDelete(oldSecretId);
       } catch (e) {
         setState(() => _error = 'Could not forget the saved password: $e');
@@ -290,6 +293,11 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
     try {
       hosts.save(host);
     } catch (e) {
+      if (retired != null) {
+        try {
+          engine.secretPut(oldSecretId!, 'password', retired);
+        } catch (_) {}
+      }
       setState(() => _error = e is String ? e : e.toString());
       return;
     }
@@ -841,6 +849,11 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
                         labelText: 'Keep-alive, seconds',
                         helperText: 'How often to ping the server so idle connections stay open. 0 turns it off.',
                       ),
+                      validator: (v) {
+                        if ((v ?? '').trim().isEmpty) return null;
+                        final n = int.tryParse(v!.trim());
+                        return (n == null || n < 0 || n > 86400) ? '0 to 86400' : null;
+                      },
                     ),
                   ],
                 ),
