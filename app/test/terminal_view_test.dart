@@ -1076,6 +1076,21 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('the text input says which window it is for, as Windows requires', (tester) async {
+    final controller = TerminalController(engine: RecordingEngine(), id: 1, label: 'test');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller, imeInput: true)),
+      ),
+    );
+    await tester.pump();
+    // Windows drops a text input with no view id, and with it every
+    // printable key, while Enter and the arrows still work.
+    expect(tester.testTextInput.setClientArgs!['viewId'], tester.view.viewId);
+    controller.dispose();
+  });
+
   testWidgets('a phone keyboard suggests and corrects words only when Settings says so', (tester) async {
     final engine = RecordingEngine();
     final controller = TerminalController(engine: engine, id: 1, label: 'test');
