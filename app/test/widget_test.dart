@@ -619,8 +619,12 @@ class FakeEngine implements Engine {
   }
   @override
   String? secretGet(String id) => secrets[id];
+  Object? failSecretDelete;
   @override
-  void secretDelete(String id) => secrets.remove(id);
+  void secretDelete(String id) {
+    if (failSecretDelete case final e?) throw e;
+    secrets.remove(id);
+  }
   @override
   GeneratedKey keyGenerate(SshKeyKind kind, String comment) {
     generated++;
@@ -1448,6 +1452,50 @@ void main() {
     await save();
     expect(engine.secrets, isEmpty);
     expect(engine.records['hosts']!.values.single, isNot(contains('p1')));
+  });
+
+  testWidgets('a saved password goes when the host signs in another way, and stays if it cannot be deleted', (
+    tester,
+  ) async {
+    final engine = FakeEngine();
+    engine.secrets['p1'] = 'hunter2';
+    engine.records['hosts'] = {
+      'h1': hostJson('h1', 'nas', auth: '{"kind":"password","password_secret_id":"p1"}'),
+    };
+    await tester.pumpWidget(app(engine));
+    await tester.pumpAndSettle();
+    Future<void> editToAsk({bool forgetFirst = false}) async {
+      await tester.tap(find.byTooltip('Host actions').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      if (forgetFirst) {
+        await scrollTap(tester, find.byKey(const Key('host-forget-password')));
+        await tester.pumpAndSettle();
+      }
+      await tester.ensureVisible(find.text('Ask each time'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ask each time'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('host-password')), findsNothing);
+      await tester.tap(find.byKey(const Key('host-save')));
+      await tester.pumpAndSettle();
+    }
+
+    // Storage refuses the delete: the host keeps its password and says why.
+    engine.failSecretDelete = 'secure storage is locked';
+    await editToAsk(forgetFirst: true);
+    await scrollTo(tester, find.textContaining('Could not forget the saved password'));
+    expect(engine.secrets, {'p1': 'hunter2'});
+    expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));
+
+    // Once it can, saving again forgets it.
+    engine.failSecretDelete = null;
+    await tester.tap(find.byKey(const Key('host-save')));
+    await tester.pumpAndSettle();
+    expect(engine.secrets, isEmpty);
+    expect(engine.records['hosts']!.values.single, isNot(contains('p1')));
+    expect(engine.records['hosts']!.values.single, contains('"kind":"interactive"'));
   });
 
   testWidgets('the host editor saves a new host into the store', (tester) async {
