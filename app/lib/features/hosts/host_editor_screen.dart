@@ -271,10 +271,19 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
         auth = const HostAuth(kind: AuthKind.none);
     }
 
-    // A saved password the host no longer uses, forgotten once the host
-    // saves: forgotten on the form, or another way to sign in was picked.
+    // A saved password the host no longer uses: forgotten on the form, or
+    // another way to sign in was picked. It goes before the host stops
+    // pointing at it, so a host kept on this device never lets it sync in
+    // between. A host left pointing at a missing password just asks for it.
     final oldSecretId = _original.auth.passwordSecretId;
-    final retiredSecretId = oldSecretId != null && auth.passwordSecretId != oldSecretId ? oldSecretId : null;
+    if (oldSecretId != null && auth.passwordSecretId != oldSecretId) {
+      try {
+        engine.secretDelete(oldSecretId);
+      } catch (e) {
+        setState(() => _error = 'Could not forget the saved password: $e');
+        return;
+      }
+    }
 
     final host = _formHost(auth);
     final hosts = ref.read(hostsProvider.notifier);
@@ -293,19 +302,6 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
           hosts.save(host.copyWith(auth: _original.auth.kind == AuthKind.password ? _original.auth : const HostAuth(kind: AuthKind.password)));
         } catch (_) {}
         setState(() => _error = 'Could not save the password: $e');
-        return;
-      }
-    }
-    if (retiredSecretId != null) {
-      try {
-        engine.secretDelete(retiredSecretId);
-      } catch (e) {
-        // Keep pointing at it, and keep where it may go, so it isn't left
-        // behind unowned; saving again tries once more.
-        try {
-          hosts.save(host.copyWith(auth: _original.auth, sync: _original.sync));
-        } catch (_) {}
-        setState(() => _error = 'Could not forget the saved password: $e');
         return;
       }
     }

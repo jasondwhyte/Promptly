@@ -623,6 +623,7 @@ class FakeEngine implements Engine {
   @override
   void secretDelete(String id) {
     if (failSecretDelete case final e?) throw e;
+    writes.add('delete secret');
     secrets.remove(id);
   }
   @override
@@ -1489,10 +1490,13 @@ void main() {
     expect(engine.secrets, {'p1': 'hunter2'});
     expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));
 
-    // Once it can, saving again forgets it.
+    // Once it can, saving again forgets it, before the host lets go of it
+    // (until then the host's sync setting still covers it).
     engine.failSecretDelete = null;
+    engine.writes.clear();
     await tester.tap(find.byKey(const Key('host-save')));
     await tester.pumpAndSettle();
+    expect(engine.writes, ['delete secret', 'record hosts']);
     expect(engine.secrets, isEmpty);
     expect(engine.records['hosts']!.values.single, isNot(contains('p1')));
     expect(engine.records['hosts']!.values.single, contains('"kind":"interactive"'));
