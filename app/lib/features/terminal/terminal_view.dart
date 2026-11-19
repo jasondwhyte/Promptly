@@ -170,6 +170,7 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
     _rows.dispose();
     if (TerminalView._active == this) TerminalView._active = null;
     _blink?.cancel();
+    _stopEdgeScroll();
     widget.controller.removeListener(_onController);
     _focus.removeListener(_onFocus);
     _focus.dispose();
@@ -785,14 +786,39 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
     final cell = _cellAt(e.localPosition);
     if (cell == _lastCell) return;
     _lastCell = cell;
+    _dragSelect();
+  }
+
+  /// While a drag is held past the top or bottom edge, lines keep coming
+  /// into view, as in other terminals.
+  Timer? _edgeScroll;
+
+  /// Extend the selection to where the drag is. Past the top or bottom
+  /// edge, the view scrolls a line and the selection reaches the edge row:
+  /// it never takes in lines that are not on screen.
+  void _dragSelect() {
+    final cell = _lastCell;
     final c = widget.controller;
-    // Dragging past the top or bottom edge brings more lines into view.
-    if (cell.line < 0) {
-      c.scroll(1);
-    } else if (c.grid.rows > 0 && cell.line >= c.grid.rows) {
-      c.scroll(-1);
+    if (cell == null || !mounted) return;
+    var line = cell.line;
+    final rows = c.grid.rows;
+    final past = rows > 0 && (line < 0 || line >= rows);
+    if (past) {
+      final up = line < 0;
+      c.scroll(up ? 1 : -1);
+      line = up ? 0 : rows - 1;
+      _edgeScroll ??= Timer.periodic(const Duration(milliseconds: 60), (_) {
+        if (_dragging) _dragSelect();
+      });
+    } else {
+      _stopEdgeScroll();
     }
-    c.selectUpdate(cell.col, cell.line, cell.right);
+    c.selectUpdate(cell.col, line, cell.right);
+  }
+
+  void _stopEdgeScroll() {
+    _edgeScroll?.cancel();
+    _edgeScroll = null;
   }
 
   void _onPointerUp(PointerEvent e) {
@@ -806,6 +832,7 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       _report(TerminalMouseAction.release, button, _cellAt(e.localPosition), held: true);
     }
     _dragging = false;
+    _stopEdgeScroll();
   }
 
   // ---- Touch -----------------------------------------------------------

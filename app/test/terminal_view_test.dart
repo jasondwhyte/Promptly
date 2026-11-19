@@ -528,6 +528,39 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('a drag held past the top edge keeps scrolling and selects only what is shown', (tester) async {
+    final engine = RecordingEngine();
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: Padding(padding: const EdgeInsets.only(top: 100), child: TerminalView(controller: controller))),
+      ),
+    );
+    await tester.pump();
+    controller.grid
+      ..cols = 80
+      ..rows = 24;
+    final origin = tester.getTopLeft(find.byType(TerminalView));
+    final lineHeight = CellMetrics.measure(controller.fontSize).height;
+
+    final drag = await tester.startGesture(origin + Offset(20, lineHeight * 5), kind: PointerDeviceKind.mouse);
+    await drag.moveTo(origin + Offset(20, -lineHeight * 3));
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), ['scroll 1']);
+    expect(engine.calls.last, startsWith('extend'));
+    expect(engine.calls.last, endsWith(',0'), reason: 'the top row on screen, not lines above it');
+
+    // Held still out there, more lines come into view.
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(engine.calls.where((c) => c.startsWith('scroll')).length, greaterThan(2));
+    await drag.up();
+    final scrolls = engine.calls.where((c) => c.startsWith('scroll')).length;
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(engine.calls.where((c) => c.startsWith('scroll')).length, scrolls, reason: 'letting go stops it');
+    controller.dispose();
+  });
+
   testWidgets('a program that asks for the mouse gets clicks, drags and the wheel; Shift selects', (tester) async {
     final engine = RecordingEngine()..takesMouse = true;
     final controller = TerminalController(engine: engine, id: 1, label: 'test');
