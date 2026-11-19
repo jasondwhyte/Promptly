@@ -571,6 +571,95 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('a touchpad scrolls, and the wheel gives arrow keys to less and man', (tester) async {
+    final engine = RecordingEngine();
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller)),
+      ),
+    );
+    await tester.pump();
+    controller.grid
+      ..cols = 80
+      ..rows = 24;
+    final at = tester.getTopLeft(find.byType(TerminalView)) + const Offset(2, 2);
+    final lineHeight = CellMetrics.measure(controller.fontSize).height;
+
+    // Two fingers moving down drag the text down: back into history.
+    await tester.sendEventToBinding(PointerPanZoomStartEvent(pointer: 9, position: at));
+    await tester.sendEventToBinding(
+      PointerPanZoomUpdateEvent(pointer: 9, position: at, pan: Offset(0, lineHeight * 3.5), panDelta: Offset(0, lineHeight * 3.5)),
+    );
+    await tester.sendEventToBinding(
+      PointerPanZoomUpdateEvent(pointer: 9, position: at, pan: Offset(0, lineHeight * 4), panDelta: Offset(0, lineHeight * 0.5)),
+    );
+    await tester.sendEventToBinding(PointerPanZoomEndEvent(pointer: 9, position: at));
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), ['scroll 3', 'scroll 1']);
+
+    // In a full-screen program that leaves the mouse alone, the wheel is
+    // the arrow keys, in the form the program asked for.
+    engine.calls.clear();
+    controller.grid
+      ..altScreen = true
+      ..appCursor = true;
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, lineHeight * 2)));
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, -lineHeight)));
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), isEmpty);
+    expect(engine.written, [
+      [0x1b, 0x4f, 0x42, 0x1b, 0x4f, 0x42],
+      [0x1b, 0x4f, 0x41],
+    ]);
+
+    // Shift scrolls Promptly's own history instead.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, -lineHeight)));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), ['scroll 1']);
+    controller.dispose();
+  });
+
+  testWidgets('Shift+Insert pastes and Ctrl+Insert copies', (tester) async {
+    final engine = RecordingEngine()..selection = 'chosen';
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    final clipboard = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      clipboard.add(call.method);
+      if (call.method == 'Clipboard.setData') clipboard.add((call.arguments as Map)['text'] as String);
+      return call.method == 'Clipboard.getData' ? {'text': 'pasted'} : null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller)),
+      ),
+    );
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.insert);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(engine.pasted, ['pasted']);
+
+    // A selection to copy.
+    final origin = tester.getTopLeft(find.byType(TerminalView));
+    final drag = await tester.startGesture(origin + const Offset(10, 4), kind: PointerDeviceKind.mouse);
+    await drag.moveBy(const Offset(40, 0));
+    await drag.up();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.insert);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(clipboard, containsAllInOrder(['Clipboard.setData', 'chosen']));
+    expect(engine.written, isEmpty, reason: 'neither key reaches the program');
+    controller.dispose();
+  });
+
   testWidgets('moving the mouse without a button is passed on once per cell', (tester) async {
     final engine = RecordingEngine()..takesMouse = true;
     final controller = TerminalController(engine: engine, id: 1, label: 'test');

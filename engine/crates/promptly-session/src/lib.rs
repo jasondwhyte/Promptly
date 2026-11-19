@@ -110,7 +110,10 @@ impl Session {
     }
 
     /// Paste text the way the running program expects: wrapped in bracketed
-    /// paste markers when it asked for them, with newlines as carriage returns.
+    /// paste markers when it asked for them, else with newlines as carriage
+    /// returns. Windows line ends (CR LF) count as one line end either way:
+    /// inside bracketed paste, shells read the CR and the LF as two, which
+    /// put a blank line after every line copied on Windows.
     ///
     /// Control characters other than tab and newlines are dropped first, so
     /// pasted text cannot end bracketed paste early (an embedded `ESC[201~`)
@@ -121,7 +124,7 @@ impl Session {
         let mut t = self.transport.lock().unwrap();
         if bracketed {
             t.write(b"\x1b[200~")?;
-            t.write(text.as_bytes())?;
+            t.write(text.replace("\r\n", "\n").as_bytes())?;
             t.write(b"\x1b[201~")
         } else {
             t.write(text.replace("\r\n", "\r").replace('\n', "\r").as_bytes())
@@ -651,6 +654,41 @@ mod tests {
             buf[..bytes.len()].copy_from_slice(&bytes);
             Ok(bytes.len())
         }
+    }
+
+    /// A transport that keeps what is written to it.
+    struct Recorder(Arc<Mutex<Vec<u8>>>);
+
+    impl Transport for Recorder {
+        fn write(&mut self, data: &[u8]) -> io::Result<()> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(())
+        }
+        fn resize(&mut self, _: TermSize) -> io::Result<()> {
+            Ok(())
+        }
+        fn exit_code(&mut self) -> Option<i32> {
+            None
+        }
+        fn close(&mut self) {}
+    }
+
+    #[test]
+    fn windows_line_ends_paste_as_one_line_end() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let session = Session::new(
+            SessionKind::Ssh { host: "t".into() },
+            TermSize::new(20, 3),
+            Palette::promptly_dark(),
+            Box::new(Recorder(sent.clone())),
+        );
+        session.paste("one\r\ntwo\nthree\r\n").unwrap();
+        assert_eq!(&*sent.lock().unwrap(), b"one\rtwo\rthree\r");
+
+        sent.lock().unwrap().clear();
+        session.notice("\x1b[?2004h", |_| {});
+        session.paste("one\r\ntwo\nthree").unwrap();
+        assert_eq!(&*sent.lock().unwrap(), b"\x1b[200~one\ntwo\nthree\x1b[201~");
     }
 
     /// A transport that goes nowhere.

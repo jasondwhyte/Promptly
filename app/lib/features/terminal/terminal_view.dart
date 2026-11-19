@@ -550,6 +550,16 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       _copySelection();
       return KeyEventResult.handled;
     }
+    // Shift+Insert and Ctrl+Insert, the older paste and copy keys that
+    // Windows and Linux terminals still take.
+    if (!isApplePlatform && key == LogicalKeyboardKey.insert && !alt && !meta && shift != ctrl) {
+      if (shift) {
+        _pasteFromClipboard();
+      } else {
+        _copySelection();
+      }
+      return KeyEventResult.handled;
+    }
     if (copyPaste && key == LogicalKeyboardKey.keyF && widget.onFind != null) {
       widget.onFind!();
       return KeyEventResult.handled;
@@ -947,21 +957,43 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is! PointerScrollEvent) return;
-    _scrollRemainder += event.scrollDelta.dy / _metrics.height;
+    _scrollBy(event.scrollDelta.dy, event.localPosition);
+  }
+
+  /// Two fingers on a laptop's touchpad. Flutter reports these as a pan
+  /// rather than as wheel turns, on a Mac, on Windows and on Linux. The
+  /// fingers move the text with them, so moving them down scrolls up.
+  void _onPanZoomStart(PointerPanZoomStartEvent event) => _scrollRemainder = 0;
+
+  void _onPanZoomUpdate(PointerPanZoomUpdateEvent event) =>
+      _scrollBy(-event.localPanDelta.dy, event.localPosition);
+
+  /// Scroll by [dy] pixels, positive towards the newest output. A program
+  /// that asks for the mouse gets wheel turns. A full-screen program that
+  /// doesn't (`less`, `man`, `git log`) has no history to scroll, so it
+  /// gets the arrow keys instead, as in other terminals; Shift scrolls
+  /// Promptly's own history whatever is running.
+  void _scrollBy(double dy, Offset local) {
+    _scrollRemainder += dy / _metrics.height;
     final lines = _scrollRemainder.truncate();
-    if (lines != 0) {
-      _scrollRemainder -= lines;
-      final cell = _cellAt(event.localPosition);
-      final wheel = lines > 0 ? TerminalMouseAction.wheelDown : TerminalMouseAction.wheelUp;
-      if (_report(wheel, null, cell)) {
-        for (var i = 1; i < lines.abs(); i++) {
-          _report(wheel, null, cell);
-        }
-        return;
+    if (lines == 0) return;
+    _scrollRemainder -= lines;
+    final c = widget.controller;
+    final cell = _cellAt(local);
+    final wheel = lines > 0 ? TerminalMouseAction.wheelDown : TerminalMouseAction.wheelUp;
+    if (_report(wheel, null, cell)) {
+      for (var i = 1; i < lines.abs(); i++) {
+        _report(wheel, null, cell);
       }
-      // Wheel down (positive dy) moves the view toward the newest output.
-      widget.controller.scroll(-lines);
+      return;
     }
+    if (c.grid.altScreen && !c.exited && !HardwareKeyboard.instance.isShiftPressed) {
+      final arrow = KeyMapper.arrow(up: lines < 0, appCursor: c.grid.appCursor);
+      c.write([for (var i = 0; i < lines.abs(); i++) ...arrow]);
+      return;
+    }
+    // Down (positive) moves the view toward the newest output.
+    c.scroll(-lines);
   }
 
   /// The screen as text, for screen readers; empty when none is running,
@@ -999,6 +1031,8 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
             child: Listener(
               behavior: HitTestBehavior.opaque,
               onPointerSignal: _onPointerSignal,
+              onPointerPanZoomStart: _onPanZoomStart,
+              onPointerPanZoomUpdate: _onPanZoomUpdate,
               onPointerDown: _onPointerDown,
               onPointerMove: _onPointerMove,
               onPointerUp: _onPointerUp,
