@@ -586,11 +586,22 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       return KeyEventResult.handled;
     }
 
+    // Option with a key that types nothing (an arrow, Backspace, Home) is
+    // Alt on a Mac whatever the setting, since there is no character for
+    // the layout to put on it. Option+Left and Right move by a word, as in
+    // Terminal.app: Escape b and Escape f, which bash and zsh take as is.
+    final optionKey = isApplePlatform && hw.isAltPressed && !_isPrintable(event);
+    if (optionKey && !ctrl && !shift && !meta) {
+      if (key == LogicalKeyboardKey.arrowLeft || key == LogicalKeyboardKey.arrowRight) {
+        _type([0x1b, key == LogicalKeyboardKey.arrowLeft ? 0x62 : 0x66]);
+        return KeyEventResult.handled;
+      }
+    }
     final bytes = KeyMapper.bytesFor(
       event,
       appCursor: c.grid.appCursor,
       ctrl: ctrl,
-      alt: alt,
+      alt: alt || optionKey,
       shift: shift,
       capsLockAsEscape: keys.capsLockAsEscape,
       capsLocked: capsLocked,
@@ -998,8 +1009,8 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
   /// Scroll by [dy] pixels, positive towards the newest output. A program
   /// that asks for the mouse gets wheel turns. A full-screen program that
   /// doesn't (`less`, `man`, `git log`) has no history to scroll, so it
-  /// gets the arrow keys instead, as in other terminals; Shift scrolls
-  /// Promptly's own history whatever is running.
+  /// gets the arrow keys instead, as in other terminals, unless it turned
+  /// that off. Shift scrolls Promptly's own history whatever is running.
   void _scrollBy(double dy, Offset local) {
     _scrollRemainder += dy / _metrics.height;
     final lines = _scrollRemainder.truncate();
@@ -1014,7 +1025,7 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       }
       return;
     }
-    if (c.grid.altScreen && !c.exited && !HardwareKeyboard.instance.isShiftPressed) {
+    if (c.grid.altScreen && c.grid.alternateScroll && !c.exited && !HardwareKeyboard.instance.isShiftPressed) {
       final arrow = KeyMapper.arrow(up: lines < 0, appCursor: c.grid.appCursor);
       c.write([for (var i = 0; i < lines.abs(); i++) ...arrow]);
       return;

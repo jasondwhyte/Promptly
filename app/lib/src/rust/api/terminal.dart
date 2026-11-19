@@ -281,6 +281,10 @@ class TerminalFrame {
   final bool bracketedPaste;
   final bool mouseReporting;
 
+  /// On the alternate screen the wheel sends arrow keys, unless the
+  /// program turned that off.
+  final bool alternateScroll;
+
   const TerminalFrame({
     required this.cols,
     required this.rows,
@@ -298,6 +302,7 @@ class TerminalFrame {
     required this.altScreen,
     required this.bracketedPaste,
     required this.mouseReporting,
+    required this.alternateScroll,
   });
 
   @override
@@ -317,7 +322,8 @@ class TerminalFrame {
       appCursor.hashCode ^
       altScreen.hashCode ^
       bracketedPaste.hashCode ^
-      mouseReporting.hashCode;
+      mouseReporting.hashCode ^
+      alternateScroll.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -339,7 +345,8 @@ class TerminalFrame {
           appCursor == other.appCursor &&
           altScreen == other.altScreen &&
           bracketedPaste == other.bracketedPaste &&
-          mouseReporting == other.mouseReporting;
+          mouseReporting == other.mouseReporting &&
+          alternateScroll == other.alternateScroll;
 }
 
 /// A link under a cell.

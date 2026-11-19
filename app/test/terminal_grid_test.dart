@@ -35,6 +35,7 @@ TerminalFrame frame({required bool full, required List<TerminalRow> rows, int co
       altScreen: false,
       bracketedPaste: false,
       mouseReporting: false,
+      alternateScroll: true,
     );
 
 void main() {

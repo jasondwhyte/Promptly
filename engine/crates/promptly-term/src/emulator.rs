@@ -469,6 +469,9 @@ impl Emulator {
             concat!(
                 // No mouse reports of any kind, focus reports or bracketed paste.
                 "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l",
+                // The wheel sends arrows on the alternate screen, as it
+                // does from the start.
+                "\x1b[?1007h",
                 "\x1b[?1004l\x1b[?2004l",
                 // Normal cursor and keypad keys, insert mode off, a line feed
                 // that only moves down, wrapping on, a visible cursor of the
@@ -602,6 +605,7 @@ impl Emulator {
             alt_screen: mode.contains(TermMode::ALT_SCREEN),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             mouse_reporting: mode.intersects(TermMode::MOUSE_MODE),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
         }
     }
 
@@ -1228,6 +1232,16 @@ mod tests {
         assert!(!f.alt_screen);
         assert!(f.full, "leaving the alternate screen repaints everything");
         assert!(e.screen_text().starts_with("primary"));
+    }
+
+    #[test]
+    fn a_program_can_stop_the_wheel_sending_arrows() {
+        let mut e = emu();
+        assert!(e.frame().alternate_scroll, "on from the start");
+        e.feed(b"\x1b[?1007l");
+        assert!(!e.frame().alternate_scroll);
+        e.reset_modes();
+        assert!(e.frame().alternate_scroll, "back on for the next program");
     }
 
     #[test]

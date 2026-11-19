@@ -67,6 +67,10 @@ class TerminalGrid {
   bool bracketedPaste = false;
   bool mouseReporting = false;
 
+  /// On the alternate screen the wheel sends arrow keys, unless the
+  /// program turned that off.
+  bool alternateScroll = true;
+
   /// Counts frames applied, so listeners can tell "same grid, new content".
   int generation = 0;
 
@@ -93,6 +97,7 @@ class TerminalGrid {
     altScreen = f.altScreen;
     bracketedPaste = f.bracketedPaste;
     mouseReporting = f.mouseReporting;
+    alternateScroll = f.alternateScroll;
     generation++;
   }
 

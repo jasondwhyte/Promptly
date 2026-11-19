@@ -98,6 +98,9 @@ pub struct TerminalFrame {
     pub alt_screen: bool,
     pub bracketed_paste: bool,
     pub mouse_reporting: bool,
+    /// On the alternate screen the wheel sends arrow keys, unless the
+    /// program turned that off.
+    pub alternate_scroll: bool,
 }
 
 pub enum TerminalEventKind {
@@ -191,6 +194,7 @@ impl From<Frame> for TerminalFrame {
             alt_screen: f.alt_screen,
             bracketed_paste: f.bracketed_paste,
             mouse_reporting: f.mouse_reporting,
+            alternate_scroll: f.alternate_scroll,
         }
     }
 }

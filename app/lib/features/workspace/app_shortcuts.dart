@@ -64,13 +64,6 @@ abstract final class AppShortcuts {
     LogicalKeyboardKey.tab,
   };
 
-  static final _arrows = <LogicalKeyboardKey>{
-    LogicalKeyboardKey.arrowLeft,
-    LogicalKeyboardKey.arrowRight,
-    LogicalKeyboardKey.arrowUp,
-    LogicalKeyboardKey.arrowDown,
-  };
-
   /// True for a key press the terminal must leave alone so the window
   /// around it can act. Copy, paste, find and zoom are the terminal
   /// view's own and are not listed here.
@@ -79,8 +72,9 @@ abstract final class AppShortcuts {
     final key = event.logicalKey;
     if (hw.isControlPressed && key == LogicalKeyboardKey.tab) return true;
     if (hw.isControlPressed && hw.isShiftPressed && _ctrlShiftLetters.contains(key)) return true;
-    final paneModifier = isApplePlatform ? hw.isMetaPressed : hw.isControlPressed;
-    if (paneModifier && hw.isAltPressed && _arrows.contains(key)) return true;
+    // Exactly the keys the pane shortcuts take: with Shift as well, say,
+    // they don't act, so the key stays the terminal's.
+    if ([focusLeft, focusRight, focusUp, focusDown].any((a) => a.accepts(event, hw))) return true;
     final tabModifier = isApplePlatform ? hw.isMetaPressed : hw.isAltPressed && !hw.isControlPressed;
     if (tabModifier && _digits.contains(key)) return true;
     return false;

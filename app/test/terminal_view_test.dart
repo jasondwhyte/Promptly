@@ -441,10 +441,27 @@ void main() {
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
     expect(AppShortcuts.isReserved(left), isTrue);
     expect(AppShortcuts.focusLeft.control && AppShortcuts.focusLeft.alt, isTrue);
+    // With Shift as well the pane keys don't act, so the program gets it.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    expect(AppShortcuts.isReserved(left), isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    expect(engine.written.last, utf8.encode('\x1b[1;8D'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
 
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     expect(AppShortcuts.isReserved(left), isFalse, reason: 'Option+Left moves by a word');
+    // With Option left to type characters, as it is by default, Option+Left
+    // and Right still move by a word, as in Terminal.app, and Option with
+    // other keys that type nothing is Alt.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    expect(engine.written.last, [0x1b, 0x62]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    expect(engine.written.last, [0x1b, 0x66]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    expect(engine.written.last, utf8.encode('\x1b[1;3A'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    expect(engine.written.last, [0x1b, 0x7f]);
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     expect(AppShortcuts.isReserved(left), isTrue);
     expect(AppShortcuts.focusLeft.meta && AppShortcuts.focusLeft.alt, isTrue);
@@ -684,6 +701,14 @@ void main() {
       [0x1b, 0x4f, 0x42, 0x1b, 0x4f, 0x42],
       [0x1b, 0x4f, 0x41],
     ]);
+
+    // A program that turned that off gets no arrows.
+    controller.grid.alternateScroll = false;
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, lineHeight)));
+    await tester.pump();
+    expect(engine.written, hasLength(2));
+    controller.grid.alternateScroll = true;
+    engine.calls.clear();
 
     // Shift scrolls Promptly's own history instead.
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
