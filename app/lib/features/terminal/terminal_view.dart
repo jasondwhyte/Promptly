@@ -205,6 +205,9 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
   // ---- Text input: the soft keyboard, or an input method -----------------
 
   TextInputConfiguration _imeConfig() => TextInputConfiguration(
+    // Which window the text is for. Windows refuses a text input that
+    // does not say, and then nothing typed arrives through it.
+    viewId: View.of(context).viewId,
     inputType: TextInputType.multiline,
     inputAction: TextInputAction.newline,
     autocorrect: widget.autocorrect,
