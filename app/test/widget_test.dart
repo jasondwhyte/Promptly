@@ -600,8 +600,10 @@ class FakeEngine implements Engine {
     return json == null ? null : StoreRecord(id: id, json: json);
   }
 
+  Object? failRecordPut;
   @override
   void recordPut(String collection, String id, String json) {
+    if (failRecordPut case final e?) throw e;
     writes.add('record $collection');
     (records[collection] ??= {})[id] = json;
   }
@@ -621,8 +623,14 @@ class FakeEngine implements Engine {
   }
   @override
   String? secretGet(String id) => secrets[id];
+  Object? failSecretDelete;
   @override
-  void secretDelete(String id) => secrets.remove(id);
+  void secretDelete(String id) {
+    // Like the engine, gone from this device before the vault step can fail.
+    secrets.remove(id);
+    if (failSecretDelete case final e?) throw e;
+    writes.add('delete secret');
+  }
   @override
   GeneratedKey keyGenerate(SshKeyKind kind, String comment) {
     generated++;
@@ -1371,20 +1379,21 @@ void main() {
     expect(find.byKey(const Key('backup-nudge')), findsNothing);
   });
 
-  group('the save-password switch says where the password goes', () {
+  group('the password field says where a typed password goes', () {
     Future<void> open(WidgetTester tester, FakeEngine engine) async {
       await tester.pumpWidget(app(engine));
       await tester.pumpAndSettle();
       await addHost(tester);
       await tester.tap(find.text('Password'));
       await tester.pumpAndSettle();
-      await scrollTo(tester, find.byKey(const Key('host-remember-password')));
+      await scrollTo(tester, find.byKey(const Key('host-password-note')));
     }
 
     testWidgets('before a vault: here, and backed up once sync is set up', (tester) async {
       await open(tester, FakeEngine());
-      expect(find.text('Save the password'), findsOneWidget);
-      expect(find.textContaining('Kept encrypted on this device. Once sync is set up'), findsOneWidget);
+      expect(find.text('Save the password'), findsNothing, reason: 'no switch: a typed password is saved');
+      expect(find.byKey(const Key('host-forget-password')), findsNothing, reason: 'nothing saved yet');
+      expect(find.textContaining('kept encrypted on this device. Once sync is set up'), findsOneWidget);
     });
 
     testWidgets('with a vault: synced, unless the host stays on this device', (tester) async {
@@ -1394,22 +1403,118 @@ void main() {
       await tester.pumpAndSettle();
       // Back up to the switch: the form is a lazily built list.
       await tester.scrollUntilVisible(
-        find.byKey(const Key('host-remember-password')),
+        find.byKey(const Key('host-password-note')),
         -150,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('Kept encrypted on this device only.'), findsOneWidget);
+      expect(find.text('A password typed here is kept encrypted on this device only.'), findsOneWidget);
     });
 
     testWidgets('with no secure storage it does not claim encryption', (tester) async {
       await open(tester, FakeEngine()..secretsKept = SecretsState.plain);
-      expect(find.textContaining('Kept on this device. Once sync is set up'), findsOneWidget);
+      expect(find.textContaining('kept on this device. Once sync is set up'), findsOneWidget);
     });
 
     testWidgets('with secure storage locked it says the password cannot be saved', (tester) async {
       await open(tester, FakeEngine()..secretsKept = SecretsState.locked);
-      expect(find.textContaining("Can't be saved now"), findsOneWidget);
+      expect(find.textContaining("A password can't be saved now"), findsOneWidget);
     });
+  });
+
+  testWidgets('a saved password is kept when left empty, replaced when typed, and can be forgotten', (tester) async {
+    final engine = FakeEngine();
+    engine.secrets['p1'] = 'hunter2';
+    engine.records['hosts'] = {'h1': hostJson('h1', 'nas', auth: '{"kind":"password","password_secret_id":"p1"}')};
+    await tester.pumpWidget(app(engine));
+    await tester.pumpAndSettle();
+    Future<void> edit() async {
+      await tester.tap(find.byTooltip('Host actions').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      await scrollTo(tester, find.byKey(const Key('host-password-note')));
+    }
+
+    Future<void> save() async {
+      await tester.tap(find.byKey(const Key('host-save')));
+      await tester.pumpAndSettle();
+    }
+
+    await edit();
+    expect(find.text('A password is saved. Type to replace it.'), findsOneWidget);
+    await save();
+    expect(engine.secrets, {'p1': 'hunter2'}, reason: 'left empty, the saved password stays');
+
+    await edit();
+    await tester.enterText(find.byKey(const Key('host-password')), 'correct horse');
+    await save();
+    expect(engine.secrets, {'p1': 'correct horse'}, reason: 'a typed password replaces it');
+
+    await edit();
+    await scrollTap(tester, find.byKey(const Key('host-forget-password')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('host-forget-password')), findsNothing);
+    expect(find.text('Leave empty to be asked each time'), findsOneWidget);
+    await save();
+    expect(engine.secrets, isEmpty);
+    expect(engine.records['hosts']!.values.single, isNot(contains('p1')));
+  });
+
+  testWidgets('a saved password goes when the host signs in another way, and stays if it cannot be deleted', (
+    tester,
+  ) async {
+    final engine = FakeEngine();
+    engine.secrets['p1'] = 'hunter2';
+    engine.records['hosts'] = {
+      'h1': hostJson('h1', 'nas', auth: '{"kind":"password","password_secret_id":"p1"}'),
+    };
+    await tester.pumpWidget(app(engine));
+    await tester.pumpAndSettle();
+    Future<void> editToAsk({bool forgetFirst = false}) async {
+      await tester.tap(find.byTooltip('Host actions').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      if (forgetFirst) {
+        await scrollTap(tester, find.byKey(const Key('host-forget-password')));
+        await tester.pumpAndSettle();
+      }
+      await tester.ensureVisible(find.text('Ask each time'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ask each time'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('host-password')), findsNothing);
+      await tester.tap(find.byKey(const Key('host-save')));
+      await tester.pumpAndSettle();
+    }
+
+    // The host can't be saved: the password it still points at is put back.
+    engine.failRecordPut = 'disk full';
+    await editToAsk(forgetFirst: true);
+    await scrollTo(tester, find.text('disk full'));
+    expect(engine.secrets, {'p1': 'hunter2'});
+    expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));
+
+    // The delete fails partway: the password is put back, the host keeps it
+    // and says why.
+    engine.failRecordPut = null;
+    engine.failSecretDelete = 'secure storage is locked';
+    await tester.tap(find.byKey(const Key('host-save')));
+    await tester.pumpAndSettle();
+    await scrollTo(tester, find.textContaining('Could not forget the saved password'));
+    expect(engine.secrets, {'p1': 'hunter2'});
+    expect(engine.records['hosts']!.values.single, contains('"password_secret_id":"p1"'));
+
+    // Once it can, saving again forgets it, before the host lets go of it
+    // (until then the host's sync setting still covers it).
+    engine.failSecretDelete = null;
+    engine.writes.clear();
+    await tester.tap(find.byKey(const Key('host-save')));
+    await tester.pumpAndSettle();
+    expect(engine.writes, ['delete secret', 'record hosts']);
+    expect(engine.secrets, isEmpty);
+    expect(engine.records['hosts']!.values.single, isNot(contains('p1')));
+    expect(engine.records['hosts']!.values.single, contains('"kind":"interactive"'));
   });
 
   testWidgets('the host editor saves a new host into the store', (tester) async {
@@ -2135,9 +2240,9 @@ void main() {
     await tester.tap(find.text('Password'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('host-password')), 'hunter2');
-    await scrollTap(tester, find.byKey(const Key('host-remember-password')));
     await tester.pumpAndSettle();
     final local = find.byKey(const Key('host-local-only'));
+    await scrollTo(tester, local);
     expect(tester.widget<SwitchListTile>(local).value, isFalse, reason: 'hosts sync by default');
     await scrollTap(tester, local);
     await tester.pumpAndSettle();

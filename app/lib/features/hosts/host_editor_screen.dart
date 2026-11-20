@@ -67,7 +67,8 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
   /// so each row keeps its own text fields.
   late List<int> _forwardKeys;
   int _nextForwardKey = 0;
-  late bool _rememberPassword;
+  /// The saved password was forgotten on this form; it goes once the host saves.
+  bool _forgetSavedPassword = false;
   String? _identityId;
   String? _groupId;
   String? _color;
@@ -78,6 +79,9 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
   String? _error;
 
   bool get _isNew => widget.hostId == null;
+
+  /// A password is saved for this host and still kept.
+  bool get _hasSavedPassword => _original.auth.passwordSecretId != null && !_forgetSavedPassword;
 
   @override
   void initState() {
@@ -107,7 +111,6 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
       AuthKind.none => _AuthChoice.none,
       _ => _AuthChoice.ask,
     };
-    _rememberPassword = _original.auth.passwordSecretId != null;
     _identityId = _original.auth.identityId;
     _groupId = _original.groupId;
     _color = _original.color;
@@ -157,7 +160,8 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
     tags: parseTags(_tags.text),
     color: _color,
     notes: _notes.text,
-    keepaliveSeconds: int.tryParse(_keepalive.text.trim()) ?? 30,
+    // Clamped too: the field may never have been built, so not validated.
+    keepaliveSeconds: (int.tryParse(_keepalive.text.trim()) ?? 30).clamp(0, 86400),
     favourite: _favourite,
     sessionLabelId: _sessionLabelId,
     labelText: _labelText.text.trim(),
@@ -186,7 +190,7 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
         // A saved password is used unless a new one is typed.
         auth = HostAuth(
           kind: AuthKind.password,
-          passwordSecretId: _password.text.isEmpty && _rememberPassword ? _original.auth.passwordSecretId : null,
+          passwordSecretId: _password.text.isEmpty && _hasSavedPassword ? _original.auth.passwordSecretId : null,
         );
       case _AuthChoice.agent:
         auth = const HostAuth(kind: AuthKind.agent);
@@ -239,8 +243,6 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
     final engine = ref.read(engineProvider);
 
     HostAuth auth;
-    // A password that is no longer remembered, forgotten once the host saves.
-    String? retiredSecretId;
     // A password to remember, saved after the host: the host says first
     // whether it may leave this device.
     (String, String)? newSecret;
@@ -253,13 +255,13 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
         auth = HostAuth(kind: AuthKind.identity, identityId: _identityId);
       case _AuthChoice.password:
         final secretId = _original.auth.passwordSecretId ?? newRecordId();
-        if (_rememberPassword && _password.text.isNotEmpty) {
+        // A typed password is always saved; left empty, a saved one is kept.
+        if (_password.text.isNotEmpty) {
           newSecret = (secretId, _password.text);
           auth = HostAuth(kind: AuthKind.password, passwordSecretId: secretId);
-        } else if (_rememberPassword && _original.auth.passwordSecretId != null) {
+        } else if (_hasSavedPassword) {
           auth = HostAuth(kind: AuthKind.password, passwordSecretId: secretId);
         } else {
-          retiredSecretId = _original.auth.passwordSecretId;
           auth = const HostAuth(kind: AuthKind.password);
         }
       case _AuthChoice.agent:
@@ -270,11 +272,38 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
         auth = const HostAuth(kind: AuthKind.none);
     }
 
+    // A saved password the host no longer uses: forgotten on the form, or
+    // another way to sign in was picked. It goes before the host stops
+    // pointing at it, so a host kept on this device never lets it sync in
+    // between. Should the host then not save, the password is put back.
+    final oldSecretId = _original.auth.passwordSecretId;
+    String? retired;
+    if (oldSecretId != null && auth.passwordSecretId != oldSecretId) {
+      try {
+        retired = engine.secretGet(oldSecretId);
+        engine.secretDelete(oldSecretId);
+      } catch (e) {
+        // It may have gone from this device before the delete failed.
+        if (retired != null) {
+          try {
+            engine.secretPut(oldSecretId, 'password', retired);
+          } catch (_) {}
+        }
+        setState(() => _error = 'Could not forget the saved password: $e');
+        return;
+      }
+    }
+
     final host = _formHost(auth);
     final hosts = ref.read(hostsProvider.notifier);
     try {
       hosts.save(host);
     } catch (e) {
+      if (retired != null) {
+        try {
+          engine.secretPut(oldSecretId!, 'password', retired);
+        } catch (_) {}
+      }
       setState(() => _error = e is String ? e : e.toString());
       return;
     }
@@ -289,11 +318,6 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
         setState(() => _error = 'Could not save the password: $e');
         return;
       }
-    }
-    if (retiredSecretId != null) {
-      try {
-        engine.secretDelete(retiredSecretId);
-      } catch (_) {}
     }
     context.go('/hosts');
   }
@@ -363,9 +387,11 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
   String _savedPasswordNote() {
     final state = ref.read(engineProvider).secretsState();
     if (state == SecretsState.locked) {
-      return "Can't be saved now: Promptly can't reach your system's secure storage. Unlock it, then restart Promptly.";
+      return "A password can't be saved now: Promptly can't reach your system's secure storage. Leave it empty to be asked each time, or unlock the storage and restart Promptly.";
     }
-    final here = state == SecretsState.encrypted ? 'Kept encrypted on this device' : 'Kept on this device';
+    final here = state == SecretsState.encrypted
+        ? 'A password typed here is kept encrypted on this device'
+        : 'A password typed here is kept on this device';
     if (_localOnly) return '$here only.';
     if (ref.watch(syncStatusProvider).value?.configured ?? false) {
       return '$here, and synced encrypted to your other devices.';
@@ -517,19 +543,32 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
                         style: monoStyle(context, size: 14),
                         decoration: InputDecoration(
                           labelText: 'Password',
-                          hintText: _original.auth.passwordSecretId != null && _rememberPassword
+                          hintText: _hasSavedPassword
                               ? 'A password is saved. Type to replace it.'
                               : 'Leave empty to be asked each time',
                         ),
                       ),
-                      SwitchListTile(
-                        key: const Key('host-remember-password'),
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Save the password'),
-                        subtitle: Text(_savedPasswordNote()),
-                        value: _rememberPassword,
-                        onChanged: (v) => setState(() => _rememberPassword = v),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          _savedPasswordNote(),
+                          key: const Key('host-password-note'),
+                          style: TextStyle(color: t.muted, fontSize: 13),
+                        ),
                       ),
+                      if (_hasSavedPassword)
+                        Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: TextButton(
+                            key: const Key('host-forget-password'),
+                            style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                            onPressed: () => setState(() {
+                              _forgetSavedPassword = true;
+                              _password.clear();
+                            }),
+                            child: const Text('Forget the saved password'),
+                          ),
+                        ),
                     ],
                     if (_auth == _AuthChoice.key)
                       identities.isEmpty
@@ -816,6 +855,11 @@ class _HostEditorScreenState extends ConsumerState<HostEditorScreen> {
                         labelText: 'Keep-alive, seconds',
                         helperText: 'How often to ping the server so idle connections stay open. 0 turns it off.',
                       ),
+                      validator: (v) {
+                        if ((v ?? '').trim().isEmpty) return null;
+                        final n = int.tryParse(v!.trim());
+                        return (n == null || n < 0 || n > 86400) ? '0 to 86400' : null;
+                      },
                     ),
                   ],
                 ),
