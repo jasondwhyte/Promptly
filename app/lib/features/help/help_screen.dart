@@ -113,7 +113,7 @@ final desktopShortcuts = <({String keys, String what})>[
   (keys: '${describeShortcut(AppShortcuts.nextTab)} / ${describeShortcut(AppShortcuts.previousTab)}', what: 'Next or previous tab'),
   (keys: isApplePlatform ? 'Cmd+1 … Cmd+9' : 'Alt+1 … Alt+9', what: 'A particular tab'),
   (keys: '${describeShortcut(AppShortcuts.splitRight)} / ${describeShortcut(AppShortcuts.splitDown)}', what: 'Split the pane right or down'),
-  (keys: 'Alt+Arrows', what: 'Move between panes'),
+  (keys: isApplePlatform ? 'Cmd+Option+Arrows' : 'Ctrl+Alt+Arrows', what: 'Move between panes'),
   (keys: describeShortcut(AppShortcuts.hostsPanel), what: 'Hosts panel, for dragging hosts onto panes'),
   (keys: describeShortcut(AppShortcuts.find), what: 'Find in the session'),
   (keys: '${describeShortcut(AppShortcuts.copy)} / ${describeShortcut(AppShortcuts.paste)}', what: 'Copy or paste'),

@@ -87,4 +87,7 @@ pub struct Frame {
     pub bracketed_paste: bool,
     /// The program wants mouse events.
     pub mouse_reporting: bool,
+    /// On the alternate screen the wheel sends arrow keys, unless the
+    /// program turned that off (DEC mode 1007, on by default).
+    pub alternate_scroll: bool,
 }

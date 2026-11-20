@@ -116,6 +116,9 @@ impl LocalShell {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "Promptly");
+        if let Some(lang) = fallback_locale(|name| std::env::var_os(name)) {
+            cmd.env("LANG", lang);
+        }
         if let Some(cwd) = cwd.or_else(dirs_home) {
             cmd.cwd(cwd);
         }
@@ -240,6 +243,28 @@ fn default_shell_name() -> Option<String> {
     }
 }
 
+/// A UTF-8 locale for the shell when Promptly was given none. An app
+/// opened from the Dock or Finder on a Mac starts without `LANG`, and a
+/// shell without a locale takes accented letters, other alphabets and
+/// emoji as bytes: they are typed and listed as `<0301>` or `\M-C\M-)`.
+/// Terminal.app sets one for the same reason. Any locale already chosen
+/// is left alone.
+fn fallback_locale(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<&'static str> {
+    if cfg!(windows) {
+        return None;
+    }
+    let set = |name: &str| var(name).is_some_and(|v| !v.is_empty());
+    if set("LC_ALL") || set("LC_CTYPE") || set("LANG") {
+        return None;
+    }
+    Some(if cfg!(target_os = "macos") {
+        "en_US.UTF-8"
+    } else {
+        // Built into glibc and musl, so there is nothing to install.
+        "C.UTF-8"
+    })
+}
+
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
@@ -344,4 +369,26 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_started_without_a_locale_gets_a_utf8_one() {
+        let none = |_: &str| None;
+        let lang = fallback_locale(none).expect("a locale");
+        assert!(lang.ends_with("UTF-8"), "{lang}");
+
+        for name in ["LANG", "LC_ALL", "LC_CTYPE"] {
+            let chosen = |n: &str| (n == name).then(|| "de_DE.UTF-8".into());
+            assert_eq!(fallback_locale(chosen), None, "{name} is kept");
+        }
+        let empty = |n: &str| (n == "LANG").then(|| "".into());
+        assert!(
+            fallback_locale(empty).is_some(),
+            "an empty LANG is no locale"
+        );
+    }
 }

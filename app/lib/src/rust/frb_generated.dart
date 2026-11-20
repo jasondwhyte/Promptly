@@ -4211,8 +4211,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TerminalFrame dco_decode_terminal_frame(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 16)
-      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
+    if (arr.length != 17)
+      throw Exception('unexpected arr length: expect 17 but see ${arr.length}');
     return TerminalFrame(
       cols: dco_decode_u_16(arr[0]),
       rows: dco_decode_u_16(arr[1]),
@@ -4230,6 +4230,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       altScreen: dco_decode_bool(arr[13]),
       bracketedPaste: dco_decode_bool(arr[14]),
       mouseReporting: dco_decode_bool(arr[15]),
+      alternateScroll: dco_decode_bool(arr[16]),
     );
   }
 
@@ -5496,6 +5497,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_altScreen = sse_decode_bool(deserializer);
     var var_bracketedPaste = sse_decode_bool(deserializer);
     var var_mouseReporting = sse_decode_bool(deserializer);
+    var var_alternateScroll = sse_decode_bool(deserializer);
     return TerminalFrame(
       cols: var_cols,
       rows: var_rows,
@@ -5513,6 +5515,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       altScreen: var_altScreen,
       bracketedPaste: var_bracketedPaste,
       mouseReporting: var_mouseReporting,
+      alternateScroll: var_alternateScroll,
     );
   }
 
@@ -6667,6 +6670,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.altScreen, serializer);
     sse_encode_bool(self.bracketedPaste, serializer);
     sse_encode_bool(self.mouseReporting, serializer);
+    sse_encode_bool(self.alternateScroll, serializer);
   }
 
   @protected

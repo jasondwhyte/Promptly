@@ -416,6 +416,61 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('Alt+arrows go to the shell; Ctrl+Alt+arrows, or Cmd+Option on a Mac, move between panes', (tester) async {
+    final engine = RecordingEngine();
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller)),
+      ),
+    );
+    await tester.pump();
+    final left = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.arrowLeft,
+      logicalKey: LogicalKeyboardKey.arrowLeft,
+      timeStamp: Duration.zero,
+    );
+
+    // Alt+Left reaches the program as xterm sends it: a word left in a shell.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    expect(AppShortcuts.isReserved(left), isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    expect(engine.written.last, utf8.encode('\x1b[1;3D'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    expect(AppShortcuts.isReserved(left), isTrue);
+    expect(AppShortcuts.focusLeft.control && AppShortcuts.focusLeft.alt, isTrue);
+    // With Shift as well the pane keys don't act, so the program gets it.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    expect(AppShortcuts.isReserved(left), isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    expect(engine.written.last, utf8.encode('\x1b[1;8D'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    expect(AppShortcuts.isReserved(left), isFalse, reason: 'Option+Left moves by a word');
+    // With Option left to type characters, as it is by default, Option+Left
+    // and Right still move by a word, as in Terminal.app, and Option with
+    // other keys that type nothing is Alt.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    expect(engine.written.last, [0x1b, 0x62]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    expect(engine.written.last, [0x1b, 0x66]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    expect(engine.written.last, utf8.encode('\x1b[1;3A'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    expect(engine.written.last, [0x1b, 0x7f]);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    expect(AppShortcuts.isReserved(left), isTrue);
+    expect(AppShortcuts.focusLeft.meta && AppShortcuts.focusLeft.alt, isTrue);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    debugDefaultTargetPlatformOverride = null;
+    controller.dispose();
+  });
+
   testWidgets('on Windows AltGr types its character ahead of Ctrl shortcuts', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -528,6 +583,39 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('a drag held past the top edge keeps scrolling and selects only what is shown', (tester) async {
+    final engine = RecordingEngine();
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: Padding(padding: const EdgeInsets.only(top: 100), child: TerminalView(controller: controller))),
+      ),
+    );
+    await tester.pump();
+    controller.grid
+      ..cols = 80
+      ..rows = 24;
+    final origin = tester.getTopLeft(find.byType(TerminalView));
+    final lineHeight = CellMetrics.measure(controller.fontSize).height;
+
+    final drag = await tester.startGesture(origin + Offset(20, lineHeight * 5), kind: PointerDeviceKind.mouse);
+    await drag.moveTo(origin + Offset(20, -lineHeight * 3));
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), ['scroll 1']);
+    expect(engine.calls.last, startsWith('extend'));
+    expect(engine.calls.last, endsWith(',0'), reason: 'the top row on screen, not lines above it');
+
+    // Held still out there, more lines come into view.
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(engine.calls.where((c) => c.startsWith('scroll')).length, greaterThan(2));
+    await drag.up();
+    final scrolls = engine.calls.where((c) => c.startsWith('scroll')).length;
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(engine.calls.where((c) => c.startsWith('scroll')).length, scrolls, reason: 'letting go stops it');
+    controller.dispose();
+  });
+
   testWidgets('a program that asks for the mouse gets clicks, drags and the wheel; Shift selects', (tester) async {
     final engine = RecordingEngine()..takesMouse = true;
     final controller = TerminalController(engine: engine, id: 1, label: 'test');
@@ -568,6 +656,103 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pump();
     expect(engine.calls.where((c) => c.startsWith('select')), isNotEmpty);
+    controller.dispose();
+  });
+
+  testWidgets('a touchpad scrolls, and the wheel gives arrow keys to less and man', (tester) async {
+    final engine = RecordingEngine();
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller)),
+      ),
+    );
+    await tester.pump();
+    controller.grid
+      ..cols = 80
+      ..rows = 24;
+    final at = tester.getTopLeft(find.byType(TerminalView)) + const Offset(2, 2);
+    final lineHeight = CellMetrics.measure(controller.fontSize).height;
+
+    // Two fingers moving down drag the text down: back into history.
+    await tester.sendEventToBinding(PointerPanZoomStartEvent(pointer: 9, position: at));
+    await tester.sendEventToBinding(
+      PointerPanZoomUpdateEvent(pointer: 9, position: at, pan: Offset(0, lineHeight * 3.5), panDelta: Offset(0, lineHeight * 3.5)),
+    );
+    await tester.sendEventToBinding(
+      PointerPanZoomUpdateEvent(pointer: 9, position: at, pan: Offset(0, lineHeight * 4), panDelta: Offset(0, lineHeight * 0.5)),
+    );
+    await tester.sendEventToBinding(PointerPanZoomEndEvent(pointer: 9, position: at));
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), ['scroll 3', 'scroll 1']);
+
+    // In a full-screen program that leaves the mouse alone, the wheel is
+    // the arrow keys, in the form the program asked for.
+    engine.calls.clear();
+    controller.grid
+      ..altScreen = true
+      ..appCursor = true;
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, lineHeight * 2)));
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, -lineHeight)));
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), isEmpty);
+    expect(engine.written, [
+      [0x1b, 0x4f, 0x42, 0x1b, 0x4f, 0x42],
+      [0x1b, 0x4f, 0x41],
+    ]);
+
+    // A program that turned that off gets no arrows.
+    controller.grid.alternateScroll = false;
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, lineHeight)));
+    await tester.pump();
+    expect(engine.written, hasLength(2));
+    controller.grid.alternateScroll = true;
+    engine.calls.clear();
+
+    // Shift scrolls Promptly's own history instead.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendEventToBinding(PointerScrollEvent(position: at, scrollDelta: Offset(0, -lineHeight)));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(engine.calls.where((c) => c.startsWith('scroll')), ['scroll 1']);
+    controller.dispose();
+  });
+
+  testWidgets('Shift+Insert pastes and Ctrl+Insert copies', (tester) async {
+    final engine = RecordingEngine()..selection = 'chosen';
+    final controller = TerminalController(engine: engine, id: 1, label: 'test');
+    final clipboard = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      clipboard.add(call.method);
+      if (call.method == 'Clipboard.setData') clipboard.add((call.arguments as Map)['text'] as String);
+      return call.method == 'Clipboard.getData' ? {'text': 'pasted'} : null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPromptlyTheme(Brightness.dark),
+        home: Scaffold(body: TerminalView(controller: controller)),
+      ),
+    );
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.insert);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(engine.pasted, ['pasted']);
+
+    // A selection to copy.
+    final origin = tester.getTopLeft(find.byType(TerminalView));
+    final drag = await tester.startGesture(origin + const Offset(10, 4), kind: PointerDeviceKind.mouse);
+    await drag.moveBy(const Offset(40, 0));
+    await drag.up();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.insert);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(clipboard, containsAllInOrder(['Clipboard.setData', 'chosen']));
+    expect(engine.written, isEmpty, reason: 'neither key reaches the program');
     controller.dispose();
   });
 

@@ -170,6 +170,7 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
     _rows.dispose();
     if (TerminalView._active == this) TerminalView._active = null;
     _blink?.cancel();
+    _stopEdgeScroll();
     widget.controller.removeListener(_onController);
     _focus.removeListener(_onFocus);
     _focus.dispose();
@@ -553,6 +554,16 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       _copySelection();
       return KeyEventResult.handled;
     }
+    // Shift+Insert and Ctrl+Insert, the older paste and copy keys that
+    // Windows and Linux terminals still take.
+    if (!isApplePlatform && key == LogicalKeyboardKey.insert && !alt && !meta && shift != ctrl) {
+      if (shift) {
+        _pasteFromClipboard();
+      } else {
+        _copySelection();
+      }
+      return KeyEventResult.handled;
+    }
     if (copyPaste && key == LogicalKeyboardKey.keyF && widget.onFind != null) {
       widget.onFind!();
       return KeyEventResult.handled;
@@ -578,11 +589,22 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       return KeyEventResult.handled;
     }
 
+    // Option with a key that types nothing (an arrow, Backspace, Home) is
+    // Alt on a Mac whatever the setting, since there is no character for
+    // the layout to put on it. Option+Left and Right move by a word, as in
+    // Terminal.app: Escape b and Escape f, which bash and zsh take as is.
+    final optionKey = isApplePlatform && hw.isAltPressed && !_isPrintable(event);
+    if (optionKey && !ctrl && !shift && !meta) {
+      if (key == LogicalKeyboardKey.arrowLeft || key == LogicalKeyboardKey.arrowRight) {
+        _type([0x1b, key == LogicalKeyboardKey.arrowLeft ? 0x62 : 0x66]);
+        return KeyEventResult.handled;
+      }
+    }
     final bytes = KeyMapper.bytesFor(
       event,
       appCursor: c.grid.appCursor,
       ctrl: ctrl,
-      alt: alt,
+      alt: alt || optionKey,
       shift: shift,
       capsLockAsEscape: keys.capsLockAsEscape,
       capsLocked: capsLocked,
@@ -778,14 +800,39 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
     final cell = _cellAt(e.localPosition);
     if (cell == _lastCell) return;
     _lastCell = cell;
+    _dragSelect();
+  }
+
+  /// While a drag is held past the top or bottom edge, lines keep coming
+  /// into view, as in other terminals.
+  Timer? _edgeScroll;
+
+  /// Extend the selection to where the drag is. Past the top or bottom
+  /// edge, the view scrolls a line and the selection reaches the edge row:
+  /// it never takes in lines that are not on screen.
+  void _dragSelect() {
+    final cell = _lastCell;
     final c = widget.controller;
-    // Dragging past the top or bottom edge brings more lines into view.
-    if (cell.line < 0) {
-      c.scroll(1);
-    } else if (c.grid.rows > 0 && cell.line >= c.grid.rows) {
-      c.scroll(-1);
+    if (cell == null || !mounted) return;
+    var line = cell.line;
+    final rows = c.grid.rows;
+    final past = rows > 0 && (line < 0 || line >= rows);
+    if (past) {
+      final up = line < 0;
+      c.scroll(up ? 1 : -1);
+      line = up ? 0 : rows - 1;
+      _edgeScroll ??= Timer.periodic(const Duration(milliseconds: 60), (_) {
+        if (_dragging) _dragSelect();
+      });
+    } else {
+      _stopEdgeScroll();
     }
-    c.selectUpdate(cell.col, cell.line, cell.right);
+    c.selectUpdate(cell.col, line, cell.right);
+  }
+
+  void _stopEdgeScroll() {
+    _edgeScroll?.cancel();
+    _edgeScroll = null;
   }
 
   void _onPointerUp(PointerEvent e) {
@@ -799,6 +846,7 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
       _report(TerminalMouseAction.release, button, _cellAt(e.localPosition), held: true);
     }
     _dragging = false;
+    _stopEdgeScroll();
   }
 
   // ---- Touch -----------------------------------------------------------
@@ -950,21 +998,43 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is! PointerScrollEvent) return;
-    _scrollRemainder += event.scrollDelta.dy / _metrics.height;
+    _scrollBy(event.scrollDelta.dy, event.localPosition);
+  }
+
+  /// Two fingers on a laptop's touchpad. Flutter reports these as a pan
+  /// rather than as wheel turns, on a Mac, on Windows and on Linux. The
+  /// fingers move the text with them, so moving them down scrolls up.
+  void _onPanZoomStart(PointerPanZoomStartEvent event) => _scrollRemainder = 0;
+
+  void _onPanZoomUpdate(PointerPanZoomUpdateEvent event) =>
+      _scrollBy(-event.localPanDelta.dy, event.localPosition);
+
+  /// Scroll by [dy] pixels, positive towards the newest output. A program
+  /// that asks for the mouse gets wheel turns. A full-screen program that
+  /// doesn't (`less`, `man`, `git log`) has no history to scroll, so it
+  /// gets the arrow keys instead, as in other terminals, unless it turned
+  /// that off. Shift scrolls Promptly's own history whatever is running.
+  void _scrollBy(double dy, Offset local) {
+    _scrollRemainder += dy / _metrics.height;
     final lines = _scrollRemainder.truncate();
-    if (lines != 0) {
-      _scrollRemainder -= lines;
-      final cell = _cellAt(event.localPosition);
-      final wheel = lines > 0 ? TerminalMouseAction.wheelDown : TerminalMouseAction.wheelUp;
-      if (_report(wheel, null, cell)) {
-        for (var i = 1; i < lines.abs(); i++) {
-          _report(wheel, null, cell);
-        }
-        return;
+    if (lines == 0) return;
+    _scrollRemainder -= lines;
+    final c = widget.controller;
+    final cell = _cellAt(local);
+    final wheel = lines > 0 ? TerminalMouseAction.wheelDown : TerminalMouseAction.wheelUp;
+    if (_report(wheel, null, cell)) {
+      for (var i = 1; i < lines.abs(); i++) {
+        _report(wheel, null, cell);
       }
-      // Wheel down (positive dy) moves the view toward the newest output.
-      widget.controller.scroll(-lines);
+      return;
     }
+    if (c.grid.altScreen && c.grid.alternateScroll && !c.exited && !HardwareKeyboard.instance.isShiftPressed) {
+      final arrow = KeyMapper.arrow(up: lines < 0, appCursor: c.grid.appCursor);
+      c.write([for (var i = 0; i < lines.abs(); i++) ...arrow]);
+      return;
+    }
+    // Down (positive) moves the view toward the newest output.
+    c.scroll(-lines);
   }
 
   /// The screen as text, for screen readers; empty when none is running,
@@ -1002,6 +1072,8 @@ class _TerminalViewState extends State<TerminalView> with TextInputClient, Delta
             child: Listener(
               behavior: HitTestBehavior.opaque,
               onPointerSignal: _onPointerSignal,
+              onPointerPanZoomStart: _onPanZoomStart,
+              onPointerPanZoomUpdate: _onPanZoomUpdate,
               onPointerDown: _onPointerDown,
               onPointerMove: _onPointerMove,
               onPointerUp: _onPointerUp,

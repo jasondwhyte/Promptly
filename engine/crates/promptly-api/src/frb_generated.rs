@@ -4499,6 +4499,7 @@ impl SseDecode for crate::api::terminal::TerminalFrame {
         let mut var_altScreen = <bool>::sse_decode(deserializer);
         let mut var_bracketedPaste = <bool>::sse_decode(deserializer);
         let mut var_mouseReporting = <bool>::sse_decode(deserializer);
+        let mut var_alternateScroll = <bool>::sse_decode(deserializer);
         return crate::api::terminal::TerminalFrame {
             cols: var_cols,
             rows: var_rows,
@@ -4516,6 +4517,7 @@ impl SseDecode for crate::api::terminal::TerminalFrame {
             alt_screen: var_altScreen,
             bracketed_paste: var_bracketedPaste,
             mouse_reporting: var_mouseReporting,
+            alternate_scroll: var_alternateScroll,
         };
     }
 }
@@ -5698,6 +5700,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::terminal::TerminalFrame {
             self.alt_screen.into_into_dart().into_dart(),
             self.bracketed_paste.into_into_dart().into_dart(),
             self.mouse_reporting.into_into_dart().into_dart(),
+            self.alternate_scroll.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -6813,6 +6816,7 @@ impl SseEncode for crate::api::terminal::TerminalFrame {
         <bool>::sse_encode(self.alt_screen, serializer);
         <bool>::sse_encode(self.bracketed_paste, serializer);
         <bool>::sse_encode(self.mouse_reporting, serializer);
+        <bool>::sse_encode(self.alternate_scroll, serializer);
     }
 }
 

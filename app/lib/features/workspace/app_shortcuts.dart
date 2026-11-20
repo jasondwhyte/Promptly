@@ -4,7 +4,8 @@ import 'package:flutter/widgets.dart';
 import '../../core/platform.dart';
 
 /// The keys the app keeps for itself on desktop. Everything else reaches
-/// the program in the terminal, which is why these all carry Shift or Alt:
+/// the program in the terminal, which is why these all carry two modifiers
+/// or Alt with a digit:
 /// Ctrl+W, Ctrl+T, Ctrl+B and Ctrl+D mean something in a shell or tmux and
 /// stay theirs.
 abstract final class AppShortcuts {
@@ -20,10 +21,17 @@ abstract final class AppShortcuts {
   static const copy = SingleActivator(LogicalKeyboardKey.keyC, control: true, shift: true);
   static const paste = SingleActivator(LogicalKeyboardKey.keyV, control: true, shift: true);
   static const quit = SingleActivator(LogicalKeyboardKey.keyQ, control: true, shift: true);
-  static const focusLeft = SingleActivator(LogicalKeyboardKey.arrowLeft, alt: true);
-  static const focusRight = SingleActivator(LogicalKeyboardKey.arrowRight, alt: true);
-  static const focusUp = SingleActivator(LogicalKeyboardKey.arrowUp, alt: true);
-  static const focusDown = SingleActivator(LogicalKeyboardKey.arrowDown, alt: true);
+  /// Ctrl+Alt+arrows move between panes, and Cmd+Option+arrows on a Mac
+  /// or iPad. Alt (Option) with an arrow alone is the shell's: it moves by
+  /// a word in zsh, fish and on a Mac, and tmux binds it too.
+  static SingleActivator get focusLeft => _pane(LogicalKeyboardKey.arrowLeft);
+  static SingleActivator get focusRight => _pane(LogicalKeyboardKey.arrowRight);
+  static SingleActivator get focusUp => _pane(LogicalKeyboardKey.arrowUp);
+  static SingleActivator get focusDown => _pane(LogicalKeyboardKey.arrowDown);
+
+  static SingleActivator _pane(LogicalKeyboardKey arrow) => isApplePlatform
+      ? SingleActivator(arrow, meta: true, alt: true)
+      : SingleActivator(arrow, control: true, alt: true);
   static const zoomIn = SingleActivator(LogicalKeyboardKey.equal, control: true);
   static const zoomOut = SingleActivator(LogicalKeyboardKey.minus, control: true);
   static const zoomReset = SingleActivator(LogicalKeyboardKey.digit0, control: true);
@@ -56,13 +64,6 @@ abstract final class AppShortcuts {
     LogicalKeyboardKey.tab,
   };
 
-  static final _arrows = <LogicalKeyboardKey>{
-    LogicalKeyboardKey.arrowLeft,
-    LogicalKeyboardKey.arrowRight,
-    LogicalKeyboardKey.arrowUp,
-    LogicalKeyboardKey.arrowDown,
-  };
-
   /// True for a key press the terminal must leave alone so the window
   /// around it can act. Copy, paste, find and zoom are the terminal
   /// view's own and are not listed here.
@@ -71,7 +72,9 @@ abstract final class AppShortcuts {
     final key = event.logicalKey;
     if (hw.isControlPressed && key == LogicalKeyboardKey.tab) return true;
     if (hw.isControlPressed && hw.isShiftPressed && _ctrlShiftLetters.contains(key)) return true;
-    if (hw.isAltPressed && !hw.isControlPressed && _arrows.contains(key)) return true;
+    // Exactly the keys the pane shortcuts take: with Shift as well, say,
+    // they don't act, so the key stays the terminal's.
+    if ([focusLeft, focusRight, focusUp, focusDown].any((a) => a.accepts(event, hw))) return true;
     final tabModifier = isApplePlatform ? hw.isMetaPressed : hw.isAltPressed && !hw.isControlPressed;
     if (tabModifier && _digits.contains(key)) return true;
     return false;

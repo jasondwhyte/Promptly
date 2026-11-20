@@ -109,6 +109,10 @@ abstract final class KeyMapper {
     return alt ? [_esc, ...encoded] : encoded;
   }
 
+  /// The Up or Down arrow with no modifiers, as the program expects it.
+  static List<int> arrow({required bool up, required bool appCursor}) =>
+      _cursorKey(up ? 'A' : 'B', appCursor, 1);
+
   /// A single letter A to Z, either case: the keys Caps Lock changes.
   static bool isLetter(String ch) => ch.length == 1 && RegExp('[A-Za-z]').hasMatch(ch);
 

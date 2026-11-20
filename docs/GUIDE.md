@@ -511,7 +511,7 @@ Split the focused pane to see two sessions side by side or one above the other.
 
 - **Split right:** Ctrl+Shift+D.
 - **Split down:** Ctrl+Shift+E.
-- **Move between panes:** Alt+Arrow keys, or click a pane.
+- **Move between panes:** Ctrl+Alt+Arrow keys (Cmd+Option+Arrow keys on a Mac), or click a pane. Alt+Arrow keys on their own go to the program in the terminal, where shells use them to move by a word.
 - **Resize:** drag the divider between panes.
 - **Close a pane:** Ctrl+Shift+W. The tab closes with its last pane.
 
@@ -889,7 +889,7 @@ These shortcuts work on Linux, Windows and macOS. Every other key combination go
 | Alt+1 … Alt+9 (Cmd on a Mac) | Go to tab 1 to 9 |
 | Ctrl+Shift+D | Split the pane right |
 | Ctrl+Shift+E | Split the pane down |
-| Alt+Arrow keys | Move to the pane in that direction |
+| Ctrl+Alt+Arrow keys (Cmd+Option on a Mac) | Move to the pane in that direction |
 | Ctrl+Shift+B | Show or hide the hosts panel |
 | Ctrl+Shift+Q | Quit Promptly |
 

@@ -40,6 +40,7 @@ TerminalGrid gridOf(List<int> flags, List<int> underline) {
         altScreen: false,
         bracketedPaste: false,
         mouseReporting: false,
+        alternateScroll: true,
       ),
     );
   return grid;
@@ -77,6 +78,7 @@ TerminalFrame textFrame(List<String> lines, {bool full = true, List<int>? only, 
     altScreen: false,
     bracketedPaste: false,
     mouseReporting: false,
+    alternateScroll: true,
   );
 }
 
