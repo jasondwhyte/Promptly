@@ -2,6 +2,19 @@
 
 Each release's section is what the GitHub Release says; keep it in plain words.
 
+## 1.1.3
+
+- Typing works in the terminal on Windows again. Before, Enter, Backspace and the arrow keys got through but letters, numbers and symbols did not.
+- Two-finger scrolling on a touchpad scrolls the terminal on Mac, Windows and Linux.
+- In less, man, git log and other full-screen programs, the mouse wheel moves through the text (it sends the arrow keys). Hold Shift to scroll Promptly's own history instead.
+- Text copied on Windows no longer pastes with a blank line between every line.
+- Dragging a selection past the top or bottom of the terminal keeps scrolling and selecting, and stops at the edge.
+- When an SSH session reconnected while a full-screen program such as tmux, vim or htop was running, the new shell kept that program's settings: dragging no longer selected text and the output no longer rewrapped when the window was resized. A reconnected session now starts clean, keeping what was on the screen.
+- Alt+Left and Alt+Right (Option on a Mac) now go to the shell, which uses them to move by a word. Moving between panes is now Ctrl+Alt+Arrow keys, or Cmd+Option+Arrow keys on a Mac.
+- Shift+Insert pastes and Ctrl+Insert copies on Windows and Linux.
+- On a Mac, a local shell opened from Promptly gets a UTF-8 language setting when none is set, so accented letters, other alphabets and emoji type and show properly.
+- A password typed on the host form is now always saved with the host, so the *Save the password* switch is gone. Leaving the field empty keeps a saved password, and *Forget the saved password* removes it. The note under the field still says where the password goes.
+
 ## 1.1.2
 
 - Promptly's home on GitHub is now github.com/jasondwhyte/Promptly, and the guide is at jasondwhyte.github.io/Promptly. The links in the app point there, and the update check looks there. Older copies still find new versions, but their links to the guide no longer open.
