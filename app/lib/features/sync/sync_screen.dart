@@ -1067,6 +1067,9 @@ class _AttentionCardState extends ConsumerState<AttentionCard> {
         await ref.read(engineProvider).syncUnlock(
               passphrase: _useCode ? null : _pass.text,
               recoveryCode: _useCode ? _code.text : null,
+              // Only this card's own answer: never inferred from what a
+              // sync finds while the person types.
+              joinOtherVault: widget.attention == SyncAttention.differentVault,
             );
         if (!mounted) return;
         _pass.clear();

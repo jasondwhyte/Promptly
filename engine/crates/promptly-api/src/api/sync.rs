@@ -329,13 +329,17 @@ pub fn sync_wake() {
 }
 
 /// Unlock the vault again after its passphrase was changed on another
-/// device, or join the vault that is in its folder now, with the
-/// passphrase or the recovery code (either one, whichever is given).
+/// device or this device lost its vault key, with the passphrase or the
+/// recovery code (either one, whichever is given). Only with
+/// `join_other_vault`, when the person was told the folder now holds a
+/// different vault, is that vault joined; otherwise a different vault is
+/// refused and nothing changes.
 pub fn sync_unlock(
     passphrase: Option<String>,
     recovery_code: Option<String>,
+    join_other_vault: bool,
 ) -> Result<(), String> {
-    sync_engine::unlock_again(passphrase, recovery_code)
+    sync_engine::unlock_again(passphrase, recovery_code, join_other_vault)
 }
 
 /// Set the vault up again in its place after its folder was deleted, from

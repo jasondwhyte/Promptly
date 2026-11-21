@@ -240,9 +240,10 @@ abstract class Engine {
   /// Sync soon in the background, as when the app comes to the front.
   void syncWake();
 
-  /// Unlock the vault again after its passphrase changed elsewhere, or join
-  /// the vault that is in its folder now.
-  Future<void> syncUnlock({String? passphrase, String? recoveryCode});
+  /// Unlock the vault again after its passphrase changed elsewhere or this
+  /// device lost its vault key. A different vault in the folder is joined
+  /// only with [joinOtherVault], from the card that said it is there.
+  Future<void> syncUnlock({String? passphrase, String? recoveryCode, bool joinOtherVault = false});
 
   /// Set the vault up again in its place after its folder was deleted.
   Future<rust_sync.SyncSetupResult> syncRecreateVault(String passphrase);
@@ -596,8 +597,8 @@ class RustEngine implements Engine {
   void syncWake() => rust_sync.syncWake();
 
   @override
-  Future<void> syncUnlock({String? passphrase, String? recoveryCode}) =>
-      rust_sync.syncUnlock(passphrase: passphrase, recoveryCode: recoveryCode);
+  Future<void> syncUnlock({String? passphrase, String? recoveryCode, bool joinOtherVault = false}) =>
+      rust_sync.syncUnlock(passphrase: passphrase, recoveryCode: recoveryCode, joinOtherVault: joinOtherVault);
 
   @override
   Future<rust_sync.SyncSetupResult> syncRecreateVault(String passphrase) =>

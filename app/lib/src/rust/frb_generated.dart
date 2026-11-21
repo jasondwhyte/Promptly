@@ -354,6 +354,7 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSyncSyncUnlock({
     String? passphrase,
     String? recoveryCode,
+    required bool joinOtherVault,
   });
 
   void crateApiSyncSyncWake();
@@ -2561,6 +2562,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<void> crateApiSyncSyncUnlock({
     String? passphrase,
     String? recoveryCode,
+    required bool joinOtherVault,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2568,6 +2570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_opt_String(passphrase, serializer);
           sse_encode_opt_String(recoveryCode, serializer);
+          sse_encode_bool(joinOtherVault, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2580,7 +2583,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiSyncSyncUnlockConstMeta,
-        argValues: [passphrase, recoveryCode],
+        argValues: [passphrase, recoveryCode, joinOtherVault],
         apiImpl: this,
       ),
     );
@@ -2588,7 +2591,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiSyncSyncUnlockConstMeta => const TaskConstMeta(
     debugName: "sync_unlock",
-    argNames: ["passphrase", "recoveryCode"],
+    argNames: ["passphrase", "recoveryCode", "joinOtherVault"],
   );
 
   @override

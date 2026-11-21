@@ -2424,11 +2424,15 @@ fn wire__crate__api__sync__sync_unlock_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
             let api_recovery_code = <Option<String>>::sse_decode(&mut deserializer);
+            let api_join_other_vault = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::sync::sync_unlock(api_passphrase, api_recovery_code)?;
+                    let output_ok = crate::api::sync::sync_unlock(
+                        api_passphrase,
+                        api_recovery_code,
+                        api_join_other_vault,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }

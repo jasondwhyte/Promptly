@@ -1185,10 +1185,12 @@ fn current_vault<'a>(
 /// and writes a full snapshot in case its folder was lost along the way.
 /// Same vault, new key: everything is encrypted again with the new key and
 /// a snapshot under it replaces this device's old files; what was read
-/// before stays read. Otherwise this is joining afresh, as setup would.
+/// before stays read. Otherwise this is joining afresh, as setup would,
+/// and only when `join_other_vault` says the person asked for that.
 pub fn unlock_again(
     passphrase: Option<String>,
     recovery_code: Option<String>,
+    join_other_vault: bool,
 ) -> Result<(), String> {
     let Some(mut config) = config()? else {
         return Err("sync is not set up".into());
@@ -1210,13 +1212,12 @@ pub fn unlock_again(
     config.manifest_keys = Some(manifest.keys_fingerprint());
     config.recovery_hint = manifest.recovery_hint().map(str::to_string);
     let same_vault = vault.vault_id() == config.vault_id;
-    // Joining another vault is only ever the answer to being told the
-    // folder holds one: unlocking again for any other reason (a changed
-    // passphrase, a vault key this device cannot read) stays with this
-    // vault, and nothing here or in either vault is touched.
-    let asked_to_join =
-        ENGINE.status.lock().unwrap().attention == Some(SyncAttention::DifferentVault);
-    if !same_vault && !asked_to_join {
+    // Joining another vault is only ever what the person asked for, from
+    // the card that said the folder holds one: unlocking again for any
+    // other reason (a changed passphrase, a vault key this device cannot
+    // read) stays with this vault, whatever a sync meanwhile found, and
+    // nothing here or in either vault is touched.
+    if !same_vault && !join_other_vault {
         return Err("The vault folder now holds a different vault, so nothing was changed. Press Sync now to see it, then join it or disconnect this device.".into());
     }
     if !same_vault || dek().ok().as_ref() != Some(vault.dek()) {
@@ -1828,9 +1829,9 @@ mod tests {
         assert!(store.pending_count().unwrap() > 0, "held back");
         assert!(sync_once().is_err());
         assert_eq!(failures(), 2, "each failed run counts towards the backoff");
-        let wrong = sync_unlock(Some("first passphrase".into()), None).unwrap_err();
+        let wrong = sync_unlock(Some("first passphrase".into()), None, false).unwrap_err();
         assert!(wrong.contains("wrong"), "{wrong}");
-        sync_unlock(Some("second passphrase".into()), None).unwrap();
+        sync_unlock(Some("second passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         assert_eq!(store.pending_count().unwrap(), 0);
         assert_eq!(failures(), 0);
@@ -1852,7 +1853,7 @@ mod tests {
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::VaultKeyUnreadable));
         assert!(store.pending_count().unwrap() > 0, "held back");
-        sync_unlock(Some("second passphrase".into()), None).unwrap();
+        sync_unlock(Some("second passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         assert_eq!(store.pending_count().unwrap(), 0);
         assert!(dek().unwrap() == key_before, "the same key, read again");
@@ -1860,7 +1861,7 @@ mod tests {
         edit("ls -la");
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::VaultKeyUnreadable));
-        sync_unlock(None, Some(setup.recovery_code.clone())).unwrap();
+        sync_unlock(None, Some(setup.recovery_code.clone()), false).unwrap();
         assert_eq!(attention(), None);
         assert_eq!(store.pending_count().unwrap(), 0);
         assert!(dek().unwrap() == key_before);
@@ -1939,8 +1940,9 @@ mod tests {
         let other_before = files(&folder);
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::DifferentVault));
-        ENGINE.status.lock().unwrap().attention = Some(SyncAttention::VaultKeyUnreadable);
-        let refused = sync_unlock(Some("other passphrase".into()), None).unwrap_err();
+        // Even with the different vault's card up (a sync found it while
+        // the key card was being answered), unlocking the key is not a join.
+        let refused = sync_unlock(Some("other passphrase".into()), None, false).unwrap_err();
         assert!(refused.contains("different vault"), "{refused}");
         assert_eq!(files(&folder), other_before, "the other vault untouched");
         assert_eq!(store.pending_count().unwrap(), pending, "nothing sent");
@@ -1950,7 +1952,7 @@ mod tests {
 
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::DifferentVault));
-        sync_unlock(Some("other passphrase".into()), None).unwrap();
+        sync_unlock(Some("other passphrase".into()), None, true).unwrap();
         assert_eq!(attention(), None);
         assert_ne!(config().unwrap().unwrap().vault_id, setup.vault_id);
         let other = Vault::open(&backend, DeviceId::generate(), "other passphrase").unwrap();
@@ -2161,7 +2163,7 @@ mod tests {
         snippet("s4");
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::PassphraseChanged));
-        sync_unlock(Some("fifth passphrase".into()), None).unwrap();
+        sync_unlock(Some("fifth passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         assert_eq!(&dek().unwrap(), laptop_vault.dek());
         assert!(only_snapshots(&vault_device(&store)));
@@ -2192,7 +2194,7 @@ mod tests {
             .unwrap();
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::PassphraseChanged));
-        sync_unlock(Some("sixth passphrase".into()), None).unwrap();
+        sync_unlock(Some("sixth passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         let reader = Vault::open(&backend, DeviceId::generate(), "sixth passphrase").unwrap();
         assert_eq!(secret_in(&reader, pw).as_deref(), Some(&b"hunter2"[..]));
