@@ -14,7 +14,7 @@ use promptly_ssh::{
     Algorithm, ConnectError, ConnectParams, Endpoint, FileKnownHosts, HostKeyInfo, HostKeyStatus,
     KnownHosts, PublicKey, QuietPrompter, SftpBackend, SftpError,
 };
-use promptly_store::{Collection, SecretStore, Store};
+use promptly_store::{Collection, SecretError, SecretStore, Store};
 use promptly_term::TermSize;
 use promptly_vault::backend::LocalFolder;
 use promptly_vault::manifest::ManifestError;
@@ -383,6 +383,29 @@ fn manifest_failure(e: SyncError) -> Failure {
         message: message.into(),
         attention: Some(attention),
     }
+}
+
+/// The vault key for a sync run. One this device has lost, or holds but
+/// cannot open (sealed with a device key that has since been replaced, or
+/// damaged), needs the person: the vault's passphrase or recovery code
+/// brings it back from the vault itself. Anything else, such as a file
+/// that could not be read just now, is tried again as usual.
+fn sync_dek() -> Result<Dek, Failure> {
+    let unreadable = || {
+        Failure {
+        message: "This device can't read its saved copy of the vault key, so sync is paused. Nothing on this device is lost. Type the vault's passphrase, or your recovery code, to unlock it again.".into(),
+        attention: Some(SyncAttention::VaultKeyUnreadable),
+    }
+    };
+    let bytes = match secrets().get(DEK_SECRET_ID) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) | Err(SecretError::Unreadable(_)) => return Err(unreadable()),
+        Err(e) => return Err(e.to_string().into()),
+    };
+    B64.decode(bytes)
+        .ok()
+        .and_then(|raw| Dek::from_slice(&raw))
+        .ok_or_else(unreadable)
 }
 
 /// Another device removed this one: nothing it writes counts any more.
@@ -1038,7 +1061,7 @@ pub fn sync_once() -> Result<(), String> {
         if is_removed(&store, &device) {
             return Err(removed_failure());
         }
-        let dek = dek()?;
+        let dek = sync_dek()?;
         let backend = backend_for(&config)?;
         let vault = Vault::with_dek(&*backend, device, config.vault_id.clone(), dek.clone());
         // The manifest first, every time: writing into a folder whose vault
@@ -1787,6 +1810,36 @@ mod tests {
         assert_eq!(attention(), None);
         assert_eq!(store.pending_count().unwrap(), 0);
         assert_eq!(failures(), 0);
+        assert_eq!(config().unwrap().unwrap().vault_id, setup.vault_id);
+
+        // This device's copy of the vault key is lost, or cannot be opened:
+        // the passphrase or the recovery code brings it back from the vault,
+        // and what was waiting goes up.
+        let saved_key = crate::api::engine::data_dir()
+            .join("secrets")
+            .join(DEK_SECRET_ID);
+        let key_before = dek().unwrap();
+        let edit = |command: &str| {
+            let json = format!(r#"{{"id":"s1","label":"s1","command":"{command}"}}"#);
+            store.put(Collection::Snippets, "s1", &json).unwrap();
+        };
+        std::fs::remove_file(&saved_key).unwrap();
+        edit("ls -l");
+        assert!(sync_once().is_err());
+        assert_eq!(attention(), Some(SyncAttention::VaultKeyUnreadable));
+        assert!(store.pending_count().unwrap() > 0, "held back");
+        sync_unlock(Some("second passphrase".into()), None).unwrap();
+        assert_eq!(attention(), None);
+        assert_eq!(store.pending_count().unwrap(), 0);
+        assert!(dek().unwrap() == key_before, "the same key, read again");
+        std::fs::write(&saved_key, b"PSECPLN1not a key").unwrap();
+        edit("ls -la");
+        assert!(sync_once().is_err());
+        assert_eq!(attention(), Some(SyncAttention::VaultKeyUnreadable));
+        sync_unlock(None, Some(setup.recovery_code.clone())).unwrap();
+        assert_eq!(attention(), None);
+        assert_eq!(store.pending_count().unwrap(), 0);
+        assert!(dek().unwrap() == key_before);
         assert_eq!(config().unwrap().unwrap().vault_id, setup.vault_id);
 
         // A newer Promptly changed the format.

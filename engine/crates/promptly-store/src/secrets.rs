@@ -23,6 +23,10 @@ pub enum SecretError {
     Locked,
     #[error("the platform refused: {0}")]
     Platform(String),
+    /// The value is there but this device's key does not open it: sealed
+    /// with a key that has since been replaced, or damaged.
+    #[error("{0}")]
+    Unreadable(String),
 }
 
 /// An in-memory store for tests and for the CLI, which has no keychain.
@@ -136,10 +140,9 @@ impl FileSecretStore {
             let bytes = std::fs::read(self.dir.join(&id)).map_err(|e| {
                 SecretError::Platform(format!("could not check saved secret {id:?}: {e}"))
             })?;
-            if bytes.starts_with(PLAIN) {
-                plain.push(id);
-            } else {
-                any_other = true;
+            match stored(&bytes) {
+                Stored::Plain(_) => plain.push(id),
+                Stored::Sealed => any_other = true,
             }
         }
         Ok((plain, any_other))
@@ -223,19 +226,21 @@ impl SecretStore for FileSecretStore {
             return Err(SecretError::Locked);
         }
         match std::fs::read(&path) {
-            Ok(bytes) => match &self.mode {
-                Mode::Locked => Err(SecretError::Locked),
-                // Saved before the key was available; sealed at the next start.
-                Mode::Encrypted(_) if bytes.starts_with(PLAIN) => {
-                    Ok(Some(bytes[PLAIN.len()..].to_vec()))
+            Ok(bytes) => match (&self.mode, stored(&bytes)) {
+                (Mode::Locked, _) => Err(SecretError::Locked),
+                // With a key: saved before the key was available, and
+                // sealed at the next start.
+                (Mode::Encrypted(_) | Mode::Plain, Stored::Plain(value)) => {
+                    Ok(Some(value.to_vec()))
                 }
-                Mode::Encrypted(k) => open(k, &Self::aad(key), &bytes).map(Some).map_err(|_| {
-                    SecretError::Platform(format!(
-                        "saved secret {key:?} could not be decrypted with this device's key"
-                    ))
-                }),
-                Mode::Plain if bytes.starts_with(PLAIN) => Ok(Some(bytes[PLAIN.len()..].to_vec())),
-                Mode::Plain => Err(SecretError::Locked),
+                (Mode::Encrypted(k), Stored::Sealed) => {
+                    open(k, &Self::aad(key), &bytes).map(Some).map_err(|_| {
+                        SecretError::Unreadable(format!(
+                            "saved secret {key:?} could not be decrypted with this device's key"
+                        ))
+                    })
+                }
+                (Mode::Plain, Stored::Sealed) => Err(SecretError::Locked),
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(SecretError::Platform(e.to_string())),
@@ -274,11 +279,35 @@ impl SecretStore for FileSecretStore {
     }
 }
 
-use promptly_vault::crypto::{open, seal, Dek};
+use promptly_vault::crypto::{open, seal, Dek, MAGIC};
 
 /// The start of every plain secret file, so no value, whatever its bytes,
 /// is ever taken for an encrypted one or the other way round.
 const PLAIN: &[u8] = b"PSECPLN1";
+
+/// What a secret file holds, told by how it starts.
+enum Stored<'a> {
+    /// The value itself.
+    Plain(&'a [u8]),
+    /// An envelope sealed with a device key, or what is left of one.
+    Sealed,
+}
+
+/// Plain files start with [`PLAIN`] and sealed ones with the envelope's
+/// magic. Promptly 1.0 wrote the bare value with neither (it had no device
+/// key yet), so a file that starts with neither is one of those, still
+/// plain, and is sealed at the next start like any other. One that is
+/// empty or stops part way through the magic is taken for a damaged
+/// envelope: never for a value.
+fn stored(bytes: &[u8]) -> Stored<'_> {
+    if let Some(value) = bytes.strip_prefix(PLAIN) {
+        Stored::Plain(value)
+    } else if bytes.starts_with(MAGIC) || MAGIC.starts_with(bytes) {
+        Stored::Sealed
+    } else {
+        Stored::Plain(bytes)
+    }
+}
 
 #[cfg(test)]
 mod file_tests {
@@ -373,6 +402,50 @@ mod file_tests {
             again.get("vault-dek").unwrap().as_deref(),
             Some(&[7u8; 32][..])
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secrets_saved_by_promptly_1_0_read_back_and_are_sealed() {
+        let dir = std::env::temp_dir().join(format!("promptly-secrets-v10-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // As 1.0 wrote them: the bare value, no marker.
+        let dek = b"N3qxv5yXQm3m0Zr8c1n2b3v4c5x6z7a8s9d0f1g2h3j=";
+        std::fs::write(dir.join("vault-dek"), dek).unwrap();
+        std::fs::write(dir.join("pw"), b"hunter2").unwrap();
+
+        // Read as they are where there is no secure storage.
+        let plain = FileSecretStore::new(dir.clone());
+        assert_eq!(plain.get("vault-dek").unwrap().as_deref(), Some(&dek[..]));
+        assert!(!plain.is_encrypted());
+        plain.put("other", b"x").unwrap();
+
+        // With a device key they are sealed at open and read back after.
+        let key = Dek::generate();
+        let s = FileSecretStore::encrypted(dir.clone(), key.clone());
+        assert!(s.is_encrypted(), "every file sealed at open");
+        for id in ["vault-dek", "pw", "other"] {
+            assert!(std::fs::read(dir.join(id)).unwrap().starts_with(MAGIC));
+        }
+        let again = FileSecretStore::encrypted(dir.clone(), key.clone());
+        assert_eq!(again.get("vault-dek").unwrap().as_deref(), Some(&dek[..]));
+        assert_eq!(again.get("pw").unwrap().as_deref(), Some(&b"hunter2"[..]));
+
+        // A sealed file cut short, even to nothing, is damaged: never a value.
+        for cut in [&b""[..], &b"PV"[..], &MAGIC[..]] {
+            std::fs::write(dir.join("pw"), cut).unwrap();
+            assert!(matches!(again.get("pw"), Err(SecretError::Unreadable(_))));
+            assert!(matches!(
+                FileSecretStore::new(dir.clone()).get("pw"),
+                Err(SecretError::Locked)
+            ));
+        }
+        // And one sealed with another key says so, as its own error.
+        FileSecretStore::encrypted(dir.clone(), Dek::generate())
+            .put("pw", b"hunter2")
+            .unwrap();
+        assert!(matches!(again.get("pw"), Err(SecretError::Unreadable(_))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

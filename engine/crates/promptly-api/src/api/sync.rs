@@ -40,6 +40,9 @@ pub enum SyncAttention {
     /// Another device removed this one, so nothing it writes counts:
     /// disconnect, and join again to sync here once more.
     Removed,
+    /// This device's saved copy of the vault key is gone or cannot be
+    /// opened: type the passphrase or recovery code to unlock it again.
+    VaultKeyUnreadable,
 }
 
 pub struct SyncStatus {
