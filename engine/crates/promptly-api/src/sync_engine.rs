@@ -1061,7 +1061,22 @@ pub fn sync_once() -> Result<(), String> {
         if is_removed(&store, &device) {
             return Err(removed_failure());
         }
-        let dek = sync_dek()?;
+        let dek = match sync_dek() {
+            Ok(dek) => dek,
+            Err(failure) => {
+                // A different vault in the folder is said first: it is
+                // joined only from its own card, never by unlocking this
+                // device's key again.
+                let elsewhere = backend_for(&config)
+                    .ok()
+                    .and_then(|b| Vault::read_manifest(&*b).ok())
+                    .is_some_and(|m| m.vault_id != config.vault_id);
+                if elsewhere {
+                    return Err(manifest_failure(SyncError::DifferentVault));
+                }
+                return Err(failure);
+            }
+        };
         let backend = backend_for(&config)?;
         let vault = Vault::with_dek(&*backend, device, config.vault_id.clone(), dek.clone());
         // The manifest first, every time: writing into a folder whose vault
@@ -1195,6 +1210,15 @@ pub fn unlock_again(
     config.manifest_keys = Some(manifest.keys_fingerprint());
     config.recovery_hint = manifest.recovery_hint().map(str::to_string);
     let same_vault = vault.vault_id() == config.vault_id;
+    // Joining another vault is only ever the answer to being told the
+    // folder holds one: unlocking again for any other reason (a changed
+    // passphrase, a vault key this device cannot read) stays with this
+    // vault, and nothing here or in either vault is touched.
+    let asked_to_join =
+        ENGINE.status.lock().unwrap().attention == Some(SyncAttention::DifferentVault);
+    if !same_vault && !asked_to_join {
+        return Err("The vault folder now holds a different vault, so nothing was changed. Press Sync now to see it, then join it or disconnect this device.".into());
+    }
     if !same_vault || dek().ok().as_ref() != Some(vault.dek()) {
         config.vault_id = vault.vault_id().to_string();
         return finish_setup(config, vault.dek(), &vault, true, same_vault);
@@ -1892,6 +1916,38 @@ mod tests {
             KdfParams::fast_for_tests(),
         )
         .unwrap();
+
+        // And this device's vault key is lost as well: the different vault
+        // is what it is told about, and unlocking the key never joins it.
+        fn files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    out.extend(files(&path));
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).unwrap()));
+                }
+            }
+            out.sort();
+            out
+        }
+        let kept_key = std::fs::read(&saved_key).unwrap();
+        std::fs::remove_file(&saved_key).unwrap();
+        edit("ls -lh");
+        let pending = store.pending_count().unwrap();
+        let other_before = files(&folder);
+        assert!(sync_once().is_err());
+        assert_eq!(attention(), Some(SyncAttention::DifferentVault));
+        ENGINE.status.lock().unwrap().attention = Some(SyncAttention::VaultKeyUnreadable);
+        let refused = sync_unlock(Some("other passphrase".into()), None).unwrap_err();
+        assert!(refused.contains("different vault"), "{refused}");
+        assert_eq!(files(&folder), other_before, "the other vault untouched");
+        assert_eq!(store.pending_count().unwrap(), pending, "nothing sent");
+        assert_eq!(config().unwrap().unwrap().vault_id, setup.vault_id);
+        assert!(!saved_key.exists(), "no key saved for it");
+        std::fs::write(&saved_key, kept_key).unwrap();
+
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::DifferentVault));
         sync_unlock(Some("other passphrase".into()), None).unwrap();

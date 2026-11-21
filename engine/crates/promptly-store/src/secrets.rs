@@ -295,14 +295,20 @@ enum Stored<'a> {
 
 /// Plain files start with [`PLAIN`] and sealed ones with the envelope's
 /// magic. Promptly 1.0 wrote the bare value with neither (it had no device
-/// key yet), so a file that starts with neither is one of those, still
-/// plain, and is sealed at the next start like any other. One that is
-/// empty or stops part way through the magic is taken for a damaged
-/// envelope: never for a value.
+/// key yet), and every value it saved was text: a password, a private key,
+/// a key passphrase or the vault key in base64. So a file that starts with
+/// neither and is text is one of those, still plain, and is sealed at the
+/// next start like any other. Anything else (empty, stopping part way
+/// through the magic, or bytes that are not text, as a damaged envelope's
+/// are) is taken for a sealed file that cannot be opened: never read as a
+/// value, and left on disk as it is.
 fn stored(bytes: &[u8]) -> Stored<'_> {
     if let Some(value) = bytes.strip_prefix(PLAIN) {
         Stored::Plain(value)
-    } else if bytes.starts_with(MAGIC) || MAGIC.starts_with(bytes) {
+    } else if bytes.starts_with(MAGIC)
+        || MAGIC.starts_with(bytes)
+        || std::str::from_utf8(bytes).is_err()
+    {
         Stored::Sealed
     } else {
         Stored::Plain(bytes)
@@ -432,15 +438,29 @@ mod file_tests {
         assert_eq!(again.get("vault-dek").unwrap().as_deref(), Some(&dek[..]));
         assert_eq!(again.get("pw").unwrap().as_deref(), Some(&b"hunter2"[..]));
 
-        // A sealed file cut short, even to nothing, is damaged: never a value.
-        for cut in [&b""[..], &b"PV"[..], &MAGIC[..]] {
+        // A sealed file cut short, even to nothing, or one whose start was
+        // lost, is damaged: never a value, and never rewritten.
+        let mut headless = seal(&key, b"x", b"hunter2").unwrap();
+        headless.drain(..4);
+        for cut in [&b""[..], &b"PV"[..], &MAGIC[..], &headless[..]] {
             std::fs::write(dir.join("pw"), cut).unwrap();
             assert!(matches!(again.get("pw"), Err(SecretError::Unreadable(_))));
             assert!(matches!(
                 FileSecretStore::new(dir.clone()).get("pw"),
                 Err(SecretError::Locked)
             ));
+            drop(FileSecretStore::encrypted(dir.clone(), key.clone()));
+            assert_eq!(std::fs::read(dir.join("pw")).unwrap(), cut, "left as it is");
         }
+        // A 1.0 value that happens to start like an envelope stays an
+        // unreadable file, untouched, rather than be guessed at.
+        std::fs::write(dir.join("pw"), b"PVLT-looking password").unwrap();
+        assert!(again.get("pw").is_err());
+        drop(FileSecretStore::encrypted(dir.clone(), key.clone()));
+        assert_eq!(
+            std::fs::read(dir.join("pw")).unwrap(),
+            b"PVLT-looking password"
+        );
         // And one sealed with another key says so, as its own error.
         FileSecretStore::encrypted(dir.clone(), Dek::generate())
             .put("pw", b"hunter2")
