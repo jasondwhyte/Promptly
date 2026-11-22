@@ -244,7 +244,8 @@ class RecordingEngine implements Engine {
   @override
   void syncWake() {}
   @override
-  Future<void> syncUnlock({String? passphrase, String? recoveryCode}) => throw UnimplementedError();
+  Future<void> syncUnlock({String? passphrase, String? recoveryCode, bool joinOtherVault = false}) =>
+      throw UnimplementedError();
   @override
   Future<SyncSetupResult> syncRecreateVault(String passphrase) => throw UnimplementedError();
   @override

@@ -1067,6 +1067,9 @@ class _AttentionCardState extends ConsumerState<AttentionCard> {
         await ref.read(engineProvider).syncUnlock(
               passphrase: _useCode ? null : _pass.text,
               recoveryCode: _useCode ? _code.text : null,
+              // Only this card's own answer: never inferred from what a
+              // sync finds while the person types.
+              joinOtherVault: widget.attention == SyncAttention.differentVault,
             );
         if (!mounted) return;
         _pass.clear();
@@ -1103,9 +1106,11 @@ class _AttentionCardState extends ConsumerState<AttentionCard> {
       SyncAttention.vaultMissing => 'The vault folder is missing',
       SyncAttention.differentVault => 'A different vault is in the folder',
       SyncAttention.removed => 'This device was removed from the vault',
+      SyncAttention.vaultKeyUnreadable => "This device can't read its vault key",
     };
     final asksForPassphrase = widget.attention == SyncAttention.passphraseChanged ||
-        widget.attention == SyncAttention.differentVault;
+        widget.attention == SyncAttention.differentVault ||
+        widget.attention == SyncAttention.vaultKeyUnreadable;
     return Card(
       key: const Key('sync-attention'),
       shape: RoundedRectangleBorder(
@@ -1145,7 +1150,11 @@ class _AttentionCardState extends ConsumerState<AttentionCard> {
                   controller: _pass,
                   obscureText: true,
                   decoration: InputDecoration(
-                    labelText: widget.attention == SyncAttention.passphraseChanged ? 'New passphrase' : 'Its passphrase',
+                    labelText: switch (widget.attention) {
+                      SyncAttention.passphraseChanged => 'New passphrase',
+                      SyncAttention.vaultKeyUnreadable => 'Vault passphrase',
+                      _ => 'Its passphrase',
+                    },
                   ),
                   onSubmitted: (_) => _unlock(),
                 ),
@@ -1158,9 +1167,9 @@ class _AttentionCardState extends ConsumerState<AttentionCard> {
                 onPressed: _busy ? null : _unlock,
                 child: Text(_busy
                     ? 'Unlocking…'
-                    : widget.attention == SyncAttention.passphraseChanged
-                        ? 'Unlock and sync'
-                        : 'Join this vault'),
+                    : widget.attention == SyncAttention.differentVault
+                        ? 'Join this vault'
+                        : 'Unlock and sync'),
               ),
             ],
             if (widget.attention == SyncAttention.vaultMissing) ...[

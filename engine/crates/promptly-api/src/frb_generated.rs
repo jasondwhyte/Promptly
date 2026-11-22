@@ -2424,11 +2424,15 @@ fn wire__crate__api__sync__sync_unlock_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
             let api_recovery_code = <Option<String>>::sse_decode(&mut deserializer);
+            let api_join_other_vault = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::sync::sync_unlock(api_passphrase, api_recovery_code)?;
+                    let output_ok = crate::api::sync::sync_unlock(
+                        api_passphrase,
+                        api_recovery_code,
+                        api_join_other_vault,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -4332,6 +4336,7 @@ impl SseDecode for crate::api::sync::SyncAttention {
             2 => crate::api::sync::SyncAttention::VaultMissing,
             3 => crate::api::sync::SyncAttention::DifferentVault,
             4 => crate::api::sync::SyncAttention::Removed,
+            5 => crate::api::sync::SyncAttention::VaultKeyUnreadable,
             _ => unreachable!("Invalid variant for SyncAttention: {}", inner),
         };
     }
@@ -5478,6 +5483,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::sync::SyncAttention {
             Self::VaultMissing => 2.into_dart(),
             Self::DifferentVault => 3.into_dart(),
             Self::Removed => 4.into_dart(),
+            Self::VaultKeyUnreadable => 5.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -6675,6 +6681,7 @@ impl SseEncode for crate::api::sync::SyncAttention {
                 crate::api::sync::SyncAttention::VaultMissing => 2,
                 crate::api::sync::SyncAttention::DifferentVault => 3,
                 crate::api::sync::SyncAttention::Removed => 4,
+                crate::api::sync::SyncAttention::VaultKeyUnreadable => 5,
                 _ => {
                     unimplemented!("");
                 }

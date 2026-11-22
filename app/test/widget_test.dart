@@ -965,10 +965,17 @@ class FakeEngine implements Engine {
   /// The passphrase the vault takes now; any other is wrong.
   String vaultPassphrase = 'new passphrase';
 
+  /// The recovery code the vault takes; any other is wrong.
+  static const vaultRecoveryCode = 'ABCD-EFGH-0000-0000-0000-0000-0000-0001';
+
   @override
-  Future<void> syncUnlock({String? passphrase, String? recoveryCode}) async {
-    syncCalls.add('unlock pass=$passphrase code=$recoveryCode');
-    if (passphrase != vaultPassphrase) throw 'the passphrase is wrong';
+  Future<void> syncUnlock({String? passphrase, String? recoveryCode, bool joinOtherVault = false}) async {
+    syncCalls.add('unlock pass=$passphrase code=$recoveryCode join=$joinOtherVault');
+    if (recoveryCode != null) {
+      if (recoveryCode != vaultRecoveryCode) throw 'the recovery code is wrong';
+    } else if (passphrase != vaultPassphrase) {
+      throw 'the passphrase is wrong';
+    }
     _configured('/shared/vault', 'test-box (Linux)');
   }
 
@@ -2061,9 +2068,41 @@ void main() {
     await tester.enterText(find.byKey(const Key('sync-unlock-passphrase')), 'new passphrase');
     await tapVisible(tester, find.byKey(const Key('sync-unlock')));
     await tester.pumpAndSettle();
-    expect(engine.syncCalls.last, 'unlock pass=new passphrase code=null');
+    expect(engine.syncCalls.last, 'unlock pass=new passphrase code=null join=false');
     expect(find.byKey(const Key('sync-attention')), findsNothing, reason: 'syncing again');
     expect(find.textContaining('Synced just now'), findsOneWidget);
+  });
+
+  testWidgets('a vault key this device cannot read is unlocked again with the recovery code', (tester) async {
+    final engine = FakeEngine()
+      ..needsAttention(SyncAttention.vaultKeyUnreadable, "This device can't read its saved copy of the vault key, so sync is paused.");
+    await tester.pumpWidget(app(engine));
+    await tester.pumpAndSettle();
+    expect(find.text('Sync paused: unlock the vault again'), findsOneWidget, reason: 'the hosts status line');
+    await openSync(tester);
+    expect(find.text("This device can't read its vault key"), findsOneWidget);
+    expect(find.text('Vault passphrase'), findsOneWidget);
+    expect(find.text('Unlock and sync'), findsOneWidget);
+    await tapVisible(tester, find.text('Use a recovery code instead'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('sync-unlock-code')), FakeEngine.vaultRecoveryCode);
+    await tapVisible(tester, find.byKey(const Key('sync-unlock')));
+    await tester.pumpAndSettle();
+    expect(engine.syncCalls.last, 'unlock pass=null code=${FakeEngine.vaultRecoveryCode} join=false');
+    expect(find.byKey(const Key('sync-attention')), findsNothing, reason: 'syncing again');
+    expect(find.textContaining('Synced just now'), findsOneWidget);
+  });
+
+  testWidgets('only the different-vault card asks to join the vault in the folder', (tester) async {
+    final engine = FakeEngine()..needsAttention(SyncAttention.differentVault, 'The vault folder now holds a different vault.');
+    await tester.pumpWidget(app(engine));
+    await tester.pumpAndSettle();
+    await openSync(tester);
+    expect(find.text('Join this vault'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('sync-unlock-passphrase')), 'new passphrase');
+    await tapVisible(tester, find.byKey(const Key('sync-unlock')));
+    await tester.pumpAndSettle();
+    expect(engine.syncCalls.last, 'unlock pass=new passphrase code=null join=true');
   });
 
   testWidgets('a deleted vault folder can be set up again here, with a new recovery code', (tester) async {

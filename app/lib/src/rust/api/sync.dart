@@ -110,12 +110,20 @@ Future<SyncStatus> syncNow() => RustLib.instance.api.crateApiSyncSyncNow();
 void syncWake() => RustLib.instance.api.crateApiSyncSyncWake();
 
 /// Unlock the vault again after its passphrase was changed on another
-/// device, or join the vault that is in its folder now, with the
-/// passphrase or the recovery code (either one, whichever is given).
-Future<void> syncUnlock({String? passphrase, String? recoveryCode}) => RustLib
-    .instance
-    .api
-    .crateApiSyncSyncUnlock(passphrase: passphrase, recoveryCode: recoveryCode);
+/// device or this device lost its vault key, with the passphrase or the
+/// recovery code (either one, whichever is given). Only with
+/// `join_other_vault`, when the person was told the folder now holds a
+/// different vault, is that vault joined; otherwise a different vault is
+/// refused and nothing changes.
+Future<void> syncUnlock({
+  String? passphrase,
+  String? recoveryCode,
+  required bool joinOtherVault,
+}) => RustLib.instance.api.crateApiSyncSyncUnlock(
+  passphrase: passphrase,
+  recoveryCode: recoveryCode,
+  joinOtherVault: joinOtherVault,
+);
 
 /// Set the vault up again in its place after its folder was deleted, from
 /// everything on this device, keeping the same vault so the other devices
@@ -200,6 +208,10 @@ enum SyncAttention {
   /// Another device removed this one, so nothing it writes counts:
   /// disconnect, and join again to sync here once more.
   removed,
+
+  /// This device's saved copy of the vault key is gone or cannot be
+  /// opened: type the passphrase or recovery code to unlock it again.
+  vaultKeyUnreadable,
 }
 
 enum SyncBackendKind { localFolder, sftp }

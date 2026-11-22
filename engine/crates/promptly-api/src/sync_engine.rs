@@ -14,7 +14,7 @@ use promptly_ssh::{
     Algorithm, ConnectError, ConnectParams, Endpoint, FileKnownHosts, HostKeyInfo, HostKeyStatus,
     KnownHosts, PublicKey, QuietPrompter, SftpBackend, SftpError,
 };
-use promptly_store::{Collection, SecretStore, Store};
+use promptly_store::{Collection, SecretError, SecretStore, Store};
 use promptly_term::TermSize;
 use promptly_vault::backend::LocalFolder;
 use promptly_vault::manifest::ManifestError;
@@ -383,6 +383,29 @@ fn manifest_failure(e: SyncError) -> Failure {
         message: message.into(),
         attention: Some(attention),
     }
+}
+
+/// The vault key for a sync run. One this device has lost, or holds but
+/// cannot open (sealed with a device key that has since been replaced, or
+/// damaged), needs the person: the vault's passphrase or recovery code
+/// brings it back from the vault itself. Anything else, such as a file
+/// that could not be read just now, is tried again as usual.
+fn sync_dek() -> Result<Dek, Failure> {
+    let unreadable = || {
+        Failure {
+        message: "This device can't read its saved copy of the vault key, so sync is paused. Nothing on this device is lost. Type the vault's passphrase, or your recovery code, to unlock it again.".into(),
+        attention: Some(SyncAttention::VaultKeyUnreadable),
+    }
+    };
+    let bytes = match secrets().get(DEK_SECRET_ID) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) | Err(SecretError::Unreadable(_)) => return Err(unreadable()),
+        Err(e) => return Err(e.to_string().into()),
+    };
+    B64.decode(bytes)
+        .ok()
+        .and_then(|raw| Dek::from_slice(&raw))
+        .ok_or_else(unreadable)
 }
 
 /// Another device removed this one: nothing it writes counts any more.
@@ -1038,7 +1061,22 @@ pub fn sync_once() -> Result<(), String> {
         if is_removed(&store, &device) {
             return Err(removed_failure());
         }
-        let dek = dek()?;
+        let dek = match sync_dek() {
+            Ok(dek) => dek,
+            Err(failure) => {
+                // A different vault in the folder is said first: it is
+                // joined only from its own card, never by unlocking this
+                // device's key again.
+                let elsewhere = backend_for(&config)
+                    .ok()
+                    .and_then(|b| Vault::read_manifest(&*b).ok())
+                    .is_some_and(|m| m.vault_id != config.vault_id);
+                if elsewhere {
+                    return Err(manifest_failure(SyncError::DifferentVault));
+                }
+                return Err(failure);
+            }
+        };
         let backend = backend_for(&config)?;
         let vault = Vault::with_dek(&*backend, device, config.vault_id.clone(), dek.clone());
         // The manifest first, every time: writing into a folder whose vault
@@ -1147,10 +1185,12 @@ fn current_vault<'a>(
 /// and writes a full snapshot in case its folder was lost along the way.
 /// Same vault, new key: everything is encrypted again with the new key and
 /// a snapshot under it replaces this device's old files; what was read
-/// before stays read. Otherwise this is joining afresh, as setup would.
+/// before stays read. Otherwise this is joining afresh, as setup would,
+/// and only when `join_other_vault` says the person asked for that.
 pub fn unlock_again(
     passphrase: Option<String>,
     recovery_code: Option<String>,
+    join_other_vault: bool,
 ) -> Result<(), String> {
     let Some(mut config) = config()? else {
         return Err("sync is not set up".into());
@@ -1172,6 +1212,14 @@ pub fn unlock_again(
     config.manifest_keys = Some(manifest.keys_fingerprint());
     config.recovery_hint = manifest.recovery_hint().map(str::to_string);
     let same_vault = vault.vault_id() == config.vault_id;
+    // Joining another vault is only ever what the person asked for, from
+    // the card that said the folder holds one: unlocking again for any
+    // other reason (a changed passphrase, a vault key this device cannot
+    // read) stays with this vault, whatever a sync meanwhile found, and
+    // nothing here or in either vault is touched.
+    if !same_vault && !join_other_vault {
+        return Err("The vault folder now holds a different vault, so nothing was changed. Press Sync now to see it, then join it or disconnect this device.".into());
+    }
     if !same_vault || dek().ok().as_ref() != Some(vault.dek()) {
         config.vault_id = vault.vault_id().to_string();
         return finish_setup(config, vault.dek(), &vault, true, same_vault);
@@ -1781,12 +1829,42 @@ mod tests {
         assert!(store.pending_count().unwrap() > 0, "held back");
         assert!(sync_once().is_err());
         assert_eq!(failures(), 2, "each failed run counts towards the backoff");
-        let wrong = sync_unlock(Some("first passphrase".into()), None).unwrap_err();
+        let wrong = sync_unlock(Some("first passphrase".into()), None, false).unwrap_err();
         assert!(wrong.contains("wrong"), "{wrong}");
-        sync_unlock(Some("second passphrase".into()), None).unwrap();
+        sync_unlock(Some("second passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         assert_eq!(store.pending_count().unwrap(), 0);
         assert_eq!(failures(), 0);
+        assert_eq!(config().unwrap().unwrap().vault_id, setup.vault_id);
+
+        // This device's copy of the vault key is lost, or cannot be opened:
+        // the passphrase or the recovery code brings it back from the vault,
+        // and what was waiting goes up.
+        let saved_key = crate::api::engine::data_dir()
+            .join("secrets")
+            .join(DEK_SECRET_ID);
+        let key_before = dek().unwrap();
+        let edit = |command: &str| {
+            let json = format!(r#"{{"id":"s1","label":"s1","command":"{command}"}}"#);
+            store.put(Collection::Snippets, "s1", &json).unwrap();
+        };
+        std::fs::remove_file(&saved_key).unwrap();
+        edit("ls -l");
+        assert!(sync_once().is_err());
+        assert_eq!(attention(), Some(SyncAttention::VaultKeyUnreadable));
+        assert!(store.pending_count().unwrap() > 0, "held back");
+        sync_unlock(Some("second passphrase".into()), None, false).unwrap();
+        assert_eq!(attention(), None);
+        assert_eq!(store.pending_count().unwrap(), 0);
+        assert!(dek().unwrap() == key_before, "the same key, read again");
+        std::fs::write(&saved_key, b"PSECPLN1not a key").unwrap();
+        edit("ls -la");
+        assert!(sync_once().is_err());
+        assert_eq!(attention(), Some(SyncAttention::VaultKeyUnreadable));
+        sync_unlock(None, Some(setup.recovery_code.clone()), false).unwrap();
+        assert_eq!(attention(), None);
+        assert_eq!(store.pending_count().unwrap(), 0);
+        assert!(dek().unwrap() == key_before);
         assert_eq!(config().unwrap().unwrap().vault_id, setup.vault_id);
 
         // A newer Promptly changed the format.
@@ -1839,9 +1917,42 @@ mod tests {
             KdfParams::fast_for_tests(),
         )
         .unwrap();
+
+        // And this device's vault key is lost as well: the different vault
+        // is what it is told about, and unlocking the key never joins it.
+        fn files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    out.extend(files(&path));
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).unwrap()));
+                }
+            }
+            out.sort();
+            out
+        }
+        let kept_key = std::fs::read(&saved_key).unwrap();
+        std::fs::remove_file(&saved_key).unwrap();
+        edit("ls -lh");
+        let pending = store.pending_count().unwrap();
+        let other_before = files(&folder);
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::DifferentVault));
-        sync_unlock(Some("other passphrase".into()), None).unwrap();
+        // Even with the different vault's card up (a sync found it while
+        // the key card was being answered), unlocking the key is not a join.
+        let refused = sync_unlock(Some("other passphrase".into()), None, false).unwrap_err();
+        assert!(refused.contains("different vault"), "{refused}");
+        assert_eq!(files(&folder), other_before, "the other vault untouched");
+        assert_eq!(store.pending_count().unwrap(), pending, "nothing sent");
+        assert_eq!(config().unwrap().unwrap().vault_id, setup.vault_id);
+        assert!(!saved_key.exists(), "no key saved for it");
+        std::fs::write(&saved_key, kept_key).unwrap();
+
+        assert!(sync_once().is_err());
+        assert_eq!(attention(), Some(SyncAttention::DifferentVault));
+        sync_unlock(Some("other passphrase".into()), None, true).unwrap();
         assert_eq!(attention(), None);
         assert_ne!(config().unwrap().unwrap().vault_id, setup.vault_id);
         let other = Vault::open(&backend, DeviceId::generate(), "other passphrase").unwrap();
@@ -2052,7 +2163,7 @@ mod tests {
         snippet("s4");
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::PassphraseChanged));
-        sync_unlock(Some("fifth passphrase".into()), None).unwrap();
+        sync_unlock(Some("fifth passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         assert_eq!(&dek().unwrap(), laptop_vault.dek());
         assert!(only_snapshots(&vault_device(&store)));
@@ -2083,7 +2194,7 @@ mod tests {
             .unwrap();
         assert!(sync_once().is_err());
         assert_eq!(attention(), Some(SyncAttention::PassphraseChanged));
-        sync_unlock(Some("sixth passphrase".into()), None).unwrap();
+        sync_unlock(Some("sixth passphrase".into()), None, false).unwrap();
         assert_eq!(attention(), None);
         let reader = Vault::open(&backend, DeviceId::generate(), "sixth passphrase").unwrap();
         assert_eq!(secret_in(&reader, pw).as_deref(), Some(&b"hunter2"[..]));
