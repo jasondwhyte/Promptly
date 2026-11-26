@@ -4,7 +4,7 @@ Terminal and SSH client. Flutter app in `app/`, Rust engine workspace in `engine
 
 ## Commands
 
-- `make check` runs everything CI checks. `make` lists all targets.
+- `make check` runs CI's lint, test and audit steps (not `cargo deny` or the platform builds). `make` lists all targets.
 - Rust, in `engine/`: `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`. For one crate, use `cargo test -p <package>`. The API crate's package is `promptly_api` (underscore); the others use hyphens.
 - App, in `app/`: `flutter analyze`, `flutter test`. Widget tests run against a fake engine and need no native build.
 - Don't run `dart format` on the app. CI doesn't check it, and it rewrites dozens of files.
